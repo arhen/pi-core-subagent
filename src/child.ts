@@ -22,6 +22,9 @@ export interface MailboxMessage {
 	at: number;
 }
 
+/** Child talk tools injected when allowIntercom: true. */
+export const CHILD_TALK_TOOLS = ["ask_parent", "notify_parent", "update_progress", "send_agent_message", "poll_agent_messages"] as const;
+
 export interface ChildHandlers {
 	onAskParent(taskId: string, question: string): Promise<string>;
 	onNotifyParent(taskId: string, message: string, level: "info" | "warning" | "error"): void;

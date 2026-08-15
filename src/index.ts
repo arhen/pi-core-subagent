@@ -24,7 +24,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { Container, Markdown, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { createChildTools, createWatchdog, type ChildHandlers } from "./child.ts";
+import { CHILD_TALK_TOOLS, createChildTools, createWatchdog, type ChildHandlers } from "./child.ts";
 import { createMailbox, type Mailbox } from "./mailbox.ts";
 
 const DEFAULT_CONCURRENCY = 3;
@@ -536,7 +536,7 @@ class SubagentManager {
 			startedAt: Date.now(),
 			model: input.model,
 			thinking: input.thinking,
-			tools: input.tools ?? (input.write ? WRITE_TOOLS : READONLY_TOOLS),
+			tools: [...(input.tools ?? (input.write ? WRITE_TOOLS : READONLY_TOOLS)), ...(run.allowIntercom ? CHILD_TALK_TOOLS : [])],
 		}, ctx, onUpdate);
 
 		let child: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
@@ -567,6 +567,8 @@ class SubagentManager {
 			await loader.reload();
 
 			const customTools: ToolDefinition[] = run.allowIntercom ? createChildTools(task.id, this.makeChildHandlers(run, task, ctx)) : [];
+			// pi filters custom tools through the `tools` allowlist — talk tools must be listed.
+			const childTools = [...(input.tools ?? (input.write ? WRITE_TOOLS : READONLY_TOOLS)), ...(run.allowIntercom ? CHILD_TALK_TOOLS : [])];
 
 			const created = await createAgentSession({
 				cwd: task.cwd,
@@ -575,7 +577,7 @@ class SubagentManager {
 				sessionManager: SessionManager.create(task.cwd, undefined, { parentSession: getParentSessionFile(ctx) }),
 				model,
 				thinkingLevel: (input.thinking ?? undefined) as ThinkingLevel | undefined,
-				tools: input.tools ?? (input.write ? WRITE_TOOLS : READONLY_TOOLS),
+				tools: childTools,
 				customTools,
 			});
 			child = created.session;
