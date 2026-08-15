@@ -987,6 +987,8 @@ export default function (pi: ExtensionAPI) {
 		promptSnippet: "Define and delegate work to specialized subagents.",
 		promptGuidelines: [
 			"Use subagent when independent review, testing, research, or parallel analysis improves quality.",
+			"Decompose parallelizable work: if the request has 2+ independent sub-tasks (separate files, separate concerns, independent research/review), delegate each to its own subagent in one parallel call instead of handling them inline.",
+			"If independent sub-tasks are sequential (each builds on the previous one's output), use chain mode with {previous}.",
 			"Define each subagent yourself: an invented name, a focused system prompt (prompt:), and a toolset — read-only (default) or write (write:true).",
 			"Prefer read-only subagents unless the task explicitly needs edits.",
 			"Use background:true for long-running work; you'll be notified on completion.",
