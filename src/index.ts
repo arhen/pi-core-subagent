@@ -12,16 +12,10 @@
  */
 
 import type { AgentSessionEvent, ExtensionAPI, ExtensionContext, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import {
-	createAgentSession,
-	DefaultResourceLoader,
-	getAgentDir,
-	getMarkdownTheme,
-	SessionManager,
-} from "@earendil-works/pi-coding-agent";
+import { createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { Container, Markdown, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { lookupAgent } from "./agents.ts";
@@ -746,7 +740,7 @@ class SubagentManager {
 			status: "queued",
 			background: Boolean(params.background),
 			allowIntercom: Boolean(params.allowIntercom),
-			notifyPerTask: params.notifyPerTask ?? true,
+			notifyPerTask: params.notifyPerTask ?? false,
 			createdAt: Date.now(),
 			concurrency: Math.max(1, Math.min(params.concurrency ?? DEFAULT_CONCURRENCY, MAX_CONCURRENCY)),
 			tasks: inputs.map((input, index) => ({
@@ -1053,18 +1047,15 @@ export default function (pi: ExtensionAPI) {
 				if (usage) lines.push(theme.fg("dim", usage));
 				return new Text(lines.join("\n"), 0, 0);
 			}
-			const container = new Container();
-			container.addChild(new Text(header, 0, 0));
-			const mdTheme = getMarkdownTheme();
+			const lines = [header];
 			for (const task of run.tasks) {
-				container.addChild(new Spacer(1));
-				container.addChild(new Text(`${statusIcon(task.status)} ${theme.fg("accent", task.agent)} ${theme.fg("muted", task.sessionId ?? "")}`, 0, 0));
-				if (task.error) container.addChild(new Text(theme.fg("error", task.error), 0, 0));
-				else if (task.finalText) container.addChild(new Markdown(task.finalText.trim(), 0, 0, mdTheme));
+				lines.push(`  ${statusIcon(task.status)} ${theme.fg("accent", task.agent)}${task.sessionId ? ` ${theme.fg("muted", task.sessionId)}` : ""}`);
+				if (task.error) lines.push(`    ${theme.fg("error", task.error)}`);
+				else if (task.finalText) lines.push(`    ${truncateToWidth(theme.fg("dim", task.finalText.trim()), 120, "…")}`);
 				const usage = formatUsage(task.usage);
-				if (usage) container.addChild(new Text(theme.fg("dim", usage), 0, 0));
+				if (usage) lines.push(`    ${theme.fg("dim", usage)}`);
 			}
-			return container;
+			return new Text(lines.join("\n"), 0, 0);
 		},
 	});
 

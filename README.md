@@ -71,7 +71,7 @@ Background + intercom:
 
 | Tool | Purpose |
 |---|---|
-| `subagent` | single / `tasks` (parallel) / `chain` (`{previous}`); `background:true` fire-and-forget; `allowIntercom:true` enables child talk tools; `notifyPerTask` (default on) wakes you as each task completes |
+| `subagent` | single / `tasks` (parallel) / `chain` (`{previous}`); `background:true` fire-and-forget; `allowIntercom:true` enables child talk tools; `notifyPerTask: true` wakes you as each task completes (default off) |
 | `subagent_status` | live per-task snapshot (non-blocking) |
 | `subagent_result` | full output of a run or one task |
 | `await_subagent` | block until a run finishes (optional `timeoutMs`) |
