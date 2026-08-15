@@ -20,8 +20,6 @@ pi install npm:pi-minimalist-subagent
 # or locally: pi install /path/to/pi-subagents
 ```
 
-> Conflicts with other extensions that register a `subagent` tool (e.g. `@gotgenes/pi-subagents`, `@narumitw/pi-subagents`). Run one at a time.
-
 ## Usage — the leader invents the agents
 
 Define agents inline (never creates files). If a task has **no inline `prompt`**, the extension looks up an existing file by agent name — `.agents/<name>.md` or `.pi/agents/<name>.md` (nearest project dir), then `~/.pi/agent/agents/<name>.md` — and inherits its prompt + tools. Inline params always win over the file.
