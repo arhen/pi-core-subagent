@@ -11,7 +11,7 @@
  * deep clones).
  */
 
-import type { AgentSessionEvent, ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentSessionEvent, ExtensionAPI, ExtensionContext, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
 	createAgentSession,
 	DefaultResourceLoader,
@@ -22,6 +22,7 @@ import {
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { createChildTools, createWatchdog, type ChildHandlers } from "./child.ts";
 import { createMailbox, type Mailbox } from "./mailbox.ts";
@@ -41,6 +42,8 @@ type TaskStatus = "queued" | "starting" | "running" | "awaiting_parent" | "compl
 type RunStatus = "queued" | "running" | "awaiting_parent" | "completed" | "failed" | "aborted";
 
 const TERMINAL: TaskStatus[] = ["completed", "failed", "aborted"];
+const SPINNER = "⠙";
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]; // pi loading icon
 
 interface UsageStats {
 	input: number;
@@ -199,18 +202,66 @@ function statusIcon(status: TaskStatus | RunStatus): string {
 	if (status === "aborted") return "⏹";
 	if (status === "awaiting_parent") return "❓";
 	if (status === "queued") return "○";
-	return "⏳";
+	return SPINNER;
 }
-function renderWidgetLines(run: RunSnapshot): string[] {
-	const live = run.tasks.filter((t) => !TERMINAL.includes(t.status)).length;
-	const done = run.tasks.length - live;
-	const lines = [`Subagents${run.background ? " (bg)" : ""} ${statusIcon(run.status)} ${run.mode}: ${done}/${run.tasks.length} done${live ? `, ${live} live` : ""}`];
+/** Static compact lines (tool-result stream, subagent_status, /subagents). */
+function compactLines(run: RunSnapshot): string[] {
+	const lines: string[] = [];
 	for (const task of run.tasks.slice(0, 8)) {
-		const tool = task.currentTool ? ` · ${task.currentTool.toolName}` : task.progressPhase ? ` · ${task.progressPhase}` : "";
-		lines.push(`${statusIcon(task.status)} ${task.agent}: ${task.status}${tool}`);
+		lines.push(`${statusIcon(task.status)} ${task.agent}`);
 	}
 	if (run.tasks.length > 8) lines.push(`… +${run.tasks.length - 8} more`);
 	return lines;
+}
+/**
+ * Above-editor widget in todo style — tree with count heading:
+ *   ● Subagents (0/1)
+ *   ├─ ⠋ code-sleuth
+ *   └─ ✓ reviewer
+ * Active rows animate with pi's own spinner (requestRender-driven).
+ */
+class SubagentsWidget implements Component {
+	private frame = 0;
+	private timer: ReturnType<typeof setInterval> | undefined;
+
+	constructor(
+		private readonly getRun: () => RunSnapshot | undefined,
+		private readonly theme: Theme,
+		private readonly tui: TUI,
+		private readonly onDispose?: () => void,
+	) {
+		this.timer = setInterval(() => {
+			this.frame += 1;
+			this.tui.requestRender();
+		}, 100);
+	}
+
+	invalidate(): void {
+		// no cached strings; render() reads live state
+	}
+
+	render(width: number): string[] {
+		const run = this.getRun();
+		if (!run || run.tasks.length === 0) return [];
+		const done = run.tasks.filter((t) => TERMINAL.includes(t.status)).length;
+		const active = !TERMINAL.includes(run.status);
+		const head = active ? "accent" : "dim";
+		const lines = [`${this.theme.fg(head, active ? "●" : "○")} ${this.theme.fg(head, `Subagents (${done}/${run.tasks.length})`)}`];
+		const visible = run.tasks.slice(0, 8);
+		visible.forEach((task, i) => {
+			const last = i === visible.length - 1 && run.tasks.length <= 8;
+			const icon = TERMINAL.includes(task.status) ? statusIcon(task.status) : SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length]!;
+			lines.push(`${this.theme.fg("dim", last ? "└─" : "├─")} ${icon} ${this.theme.fg("muted", task.agent)}`);
+		});
+		if (run.tasks.length > 8) lines.push(`${this.theme.fg("dim", "└─")} ${this.theme.fg("dim", `+${run.tasks.length - 8} more`)}`);
+		return lines.slice(0, Math.max(1, width));
+	}
+
+	dispose(): void {
+		if (this.timer) clearInterval(this.timer);
+		this.timer = undefined;
+		this.onDispose?.();
+	}
 }
 /** Blocking-call summary: full text, because the model asked for it. */
 function makeSummary(run: RunSnapshot): string {
@@ -347,20 +398,22 @@ class SubagentManager {
 		this.emit("subagent:notification", { runId: run.id, kind, body });
 	}
 
-	// Throttled widget + stream update: one render per WIDGET_THROTTLE_MS,
-	// cheap payloads (no deep clone) — the O(n²) fix.
+	// Widget: register-once + requestRender (todo-overlay pattern).
+	// The component self-animates the spinner via its own 100ms interval;
+	// scheduleWidget just throttles status changes into requestRender calls.
+	private widgetTui: TUI | null = null;
 	private scheduleWidget(run: RunSnapshot | undefined, ctx?: ExtensionContext, onUpdate?: (partial: any) => void): void {
 		if (run) this.widgetRun = run;
 		if (this.widgetTimer || !this.widgetRun) return;
 		const target = this.widgetRun;
 		this.widgetTimer = setTimeout(() => {
 			this.widgetTimer = undefined;
-			const lines = renderWidgetLines(target);
 			if (ctx?.hasUI) {
 				ctx.ui.setStatus("subagents", `subagents: ${target.tasks.filter((t) => !TERMINAL.includes(t.status)).length} running`);
-				ctx.ui.setWidget("subagents", lines, { placement: "aboveEditor" });
+				this.ensureWidget(ctx);
+				this.widgetTui?.requestRender();
 			}
-			onUpdate?.({ content: [{ type: "text", text: lines.join("\n") }] });
+			onUpdate?.({ content: [{ type: "text", text: compactLines(target).join("\n") }] });
 		}, WIDGET_THROTTLE_MS);
 	}
 	private flushWidget(ctx?: ExtensionContext, onUpdate?: (partial: any) => void): void {
@@ -370,12 +423,25 @@ class SubagentManager {
 		}
 		const run = this.widgetRun;
 		if (!run) return;
-		const lines = renderWidgetLines(run);
 		if (ctx?.hasUI) {
 			ctx.ui.setStatus("subagents", `subagents: ${run.status}`);
-			ctx.ui.setWidget("subagents", lines, { placement: "aboveEditor" });
+			this.ensureWidget(ctx);
+			this.widgetTui?.requestRender();
 		}
-		onUpdate?.({ content: [{ type: "text", text: lines.join("\n") }] });
+		onUpdate?.({ content: [{ type: "text", text: compactLines(run).join("\n") }] });
+	}
+	private ensureWidget(ctx: ExtensionContext): void {
+		if (this.widgetTui !== null || !ctx.hasUI) return;
+		ctx.ui.setWidget(
+			"subagents",
+			(tui, theme) => {
+				this.widgetTui = tui;
+				return new SubagentsWidget(() => this.widgetRun, theme, tui, () => {
+					this.widgetTui = null;
+				});
+			},
+			{ placement: "aboveEditor" },
+		);
 	}
 
 	private updateRun(run: RunSnapshot, ctx?: ExtensionContext, onUpdate?: (partial: any) => void): void {
@@ -797,7 +863,7 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify("No subagent runs in this session.", "info");
 				return;
 			}
-			ctx.ui.setWidget("subagents", runs.flatMap((run) => renderWidgetLines(run).concat("")), { placement: "aboveEditor" });
+			ctx.ui.setWidget("subagents", runs.flatMap((run) => compactLines(run).concat("")), { placement: "aboveEditor" });
 			ctx.ui.notify(`Showing ${runs.length} subagent run(s).`, "info");
 		},
 	});
@@ -883,7 +949,7 @@ export default function (pi: ExtensionAPI) {
 			const { runId } = params as { runId: string };
 			const run = manager.getRun(runId);
 			if (!run) return { content: [{ type: "text", text: `Unknown runId: ${runId}` }], isError: true, details: {} };
-			return { content: [{ type: "text", text: renderWidgetLines(run).join("\n") }], details: { run: cloneRun(run) } };
+			return { content: [{ type: "text", text: compactLines(run).join("\n") }], details: { run: cloneRun(run) } };
 		},
 	});
 
