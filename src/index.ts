@@ -297,7 +297,8 @@ function makeSummary(run: RunSnapshot): string {
 	for (const task of run.tasks) {
 		lines.push(`\n## ${task.agent} ${statusIcon(task.status)}${task.error ? `\nError: ${task.error}` : `\n${truncateText(task.finalText || "(no output)")}`}`);
 	}
-	return lines.join("\n");
+	// Ceiling on the WHOLE summary — 16 tasks × 24KB would otherwise flood the parent context.
+	return truncateText(lines.join("\n"));
 }
 /** Notification: 3 lines max. Full output stays out of parent context. */
 function makeNotice(run: RunSnapshot, kind: string): string {
@@ -340,6 +341,7 @@ class SubagentManager {
 	private pendingReplies = new Map<string, PendingReply>();
 	private liveChildren = new Map<string, { abort: () => void; dispose: () => void; touchWatchdog: () => void }>();
 	private mailboxes: Mailbox = createMailbox();
+	private runControllers = new Map<string, AbortController>();
 	private widgetTimer: ReturnType<typeof setTimeout> | undefined;
 	private widgetRun: RunSnapshot | undefined;
 
@@ -355,6 +357,7 @@ class SubagentManager {
 		this.runs.clear();
 		this.settlers.clear();
 		this.pendingReplies.clear();
+		this.runControllers.clear();
 		this.mailboxes = createMailbox();
 		if (this.widgetTimer) clearTimeout(this.widgetTimer);
 		this.widgetTimer = undefined;
@@ -497,9 +500,10 @@ class SubagentManager {
 					this.emit("subagent:intercom", { runId: run.id, taskId: task.id, kind: "notify", level: "info", message: text });
 					return true;
 				}
-				return this.mailboxes.send(task.id, to, text);
+				// Run-scoped keys: sibling ids are run-local; cross-run task_1 can never collide.
+				return this.mailboxes.send(`${run.id}:${task.id}`, `${run.id}:${to}`, text);
 			},
-			onPollMailbox: (taskId) => this.mailboxes.poll(taskId),
+			onPollMailbox: (taskId) => this.mailboxes.poll(`${run.id}:${taskId}`),
 		};
 	}
 	private awaitParentReply(runId: string, taskId: string): Promise<string> {
@@ -593,7 +597,7 @@ class SubagentManager {
 			});
 
 			unsubscribe = child.subscribe((event: AgentSessionEvent) => {
-				const active = event.type === "message_end" || event.type === "tool_execution_start" || event.type === "tool_execution_end";
+				const active = event.type === "message_end" || event.type === "tool_execution_start" || event.type === "tool_execution_end" || event.type === "agent_settled";
 				if (active) {
 					watchdog.touch();
 					this.emit("subagent:session-event", { runId: run.id, taskId: task.id, seq: eventSeq++, event: { type: event.type } });
@@ -620,17 +624,28 @@ class SubagentManager {
 						if (failure) {
 							pendingFailure = failure;
 							failChildEnd?.(failureError(failure));
-						} else {
-							childEndResolve?.();
 						}
+						// NOTE: success does NOT resolve childEndPromise here — pi may run a
+						// continuation leg (compaction/overflow recovery) that emits another
+						// agent_end. Resolve only on agent_settled, after all legs finish.
 					}
+				} else if (event.type === "agent_settled") {
+					childEndResolve?.();
 				}
 			});
 
-			if (signal) {
-				const listener = () => void child?.abort();
-				signal.addEventListener("abort", listener, { once: true });
-				abortListener = () => signal.removeEventListener("abort", listener);
+			const abortChild = () => void child?.abort();
+			const runController = this.runControllers.get(run.id);
+			if (signal) signal.addEventListener("abort", abortChild, { once: true });
+			if (runController) runController.signal.addEventListener("abort", abortChild, { once: true });
+			abortListener = () => {
+				signal?.removeEventListener("abort", abortChild);
+				runController?.signal.removeEventListener("abort", abortChild);
+			};
+			// Cancel may have landed during session creation — honor it before prompting.
+			if (run.status === "aborted" || TERMINAL.includes(task.status)) {
+				await child.abort();
+				throw new Error("Canceled by subagent_cancel");
 			}
 			this.liveChildren.set(key, { abort: () => void child?.abort(), dispose: () => watchdog.dispose(), touchWatchdog: () => watchdog.touch() });
 
@@ -727,7 +742,8 @@ class SubagentManager {
 		run.tasks.forEach((t) => (t.runId = run.id));
 		this.runs.set(run.id, run);
 		this.settlers.set(run.id, () => {});
-		for (const task of run.tasks) this.mailboxes.open(task.id);
+		this.runControllers.set(run.id, new AbortController());
+		for (const task of run.tasks) this.mailboxes.open(`${run.id}:${task.id}`);
 		this.emit("subagent:run-created", { run: cloneRun(run) });
 		return { run, inputs };
 	}
@@ -767,7 +783,8 @@ class SubagentManager {
 		this.flushWidget(ctx, onUpdate);
 		this.emit("subagent:run-completed", { runId: run.id, status: run.status, run: cloneRun(run), aggregateUsage: run.aggregateUsage });
 		this.settleRun(run.id, run);
-		for (const task of run.tasks) this.mailboxes.close(task.id);
+		this.runControllers.delete(run.id);
+		for (const task of run.tasks) this.mailboxes.close(`${run.id}:${task.id}`);
 		this.persist(ctx);
 	}
 
@@ -789,6 +806,7 @@ class SubagentManager {
 		const run = this.runs.get(runId);
 		if (!run) return { aborted: 0 };
 		let aborted = 0;
+		this.runControllers.get(runId)?.abort();
 		for (const [key, child] of this.liveChildren) {
 			if (key.startsWith(`${runId}:`)) {
 				child.abort();
@@ -804,7 +822,8 @@ class SubagentManager {
 		run.status = "aborted";
 		run.endedAt = Date.now();
 		this.settleRun(runId, run);
-		for (const task of run.tasks) this.mailboxes.close(task.id);
+		this.runControllers.delete(runId);
+		for (const task of run.tasks) this.mailboxes.close(`${run.id}:${task.id}`);
 		this.emit("subagent:run-completed", { runId: run.id, status: "aborted", run: cloneRun(run) });
 		return { aborted };
 	}
