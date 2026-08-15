@@ -90,7 +90,6 @@ Background + intercom:
 |---|---|
 | `ask_parent` | blocking question to the leader; parent answers via `reply_subagent` |
 | `notify_parent` | one-way message to the leader |
-| `update_progress` | phase hint for the widget |
 | `send_agent_message` | message to a sibling subagent's mailbox (`to` = its task id, or `"leader"`) |
 | `poll_agent_messages` | drain this subagent's mailbox |
 
@@ -98,7 +97,7 @@ Background + intercom:
 
 - Parent tools: 6 schemas with short descriptions. **No catalog, no context hook** — nothing injected per request.
 - Background completion: 3-line notice. Full text only via `subagent_result`.
-- Children: isolated sessions; talk tools injected only when `allowIntercom`.
+- Children: isolated sessions; talk tools injected only when `allowIntercom`; each child's prompt states its own task id and its siblings' so mailbox addressing works.
 
 ## Development
 

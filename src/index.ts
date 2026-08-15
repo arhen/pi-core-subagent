@@ -56,7 +56,6 @@ interface TaskInput {
 	id?: string;
 	/** Name the leader invents for this subagent (display + mailbox addressing). */
 	agent: string;
-	desc?: string;
 	task: string;
 	/** System prompt the leader writes for this agent. Optional — a minimal default is used. */
 	prompt?: string;
@@ -75,7 +74,6 @@ interface TaskSnapshot {
 	task: string;
 	cwd: string;
 	status: TaskStatus;
-	agentSource?: string;
 	sessionId?: string;
 	sessionFile?: string;
 	model?: string;
@@ -83,10 +81,9 @@ interface TaskSnapshot {
 	tools?: string[];
 	startedAt?: number;
 	endedAt?: number;
-	currentTool?: { toolName: string };
-	progressPhase?: string;
-	intercomQuestion?: string;
 	toolCalls: number;
+	/** Address + sibling roster, injected into the child so mailbox tools can address them. */
+	roster?: string;
 	lastActivity?: string;
 	usage: UsageStats;
 	finalText?: string;
@@ -196,7 +193,7 @@ function formatUsage(usage: UsageStats): string {
 	if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
 	if (usage.input) parts.push(`↑ ${fmtTokens(usage.input)}`);
 	if (usage.output) parts.push(`↓ ${fmtTokens(usage.output)}`);
-	if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
+	if (usage.cost > 0) parts.push(usage.cost >= 0.0001 ? `$${usage.cost.toFixed(4)}` : "$<0.0001");
 	return parts.join(" · ");
 }
 function statusIcon(status: TaskStatus | RunStatus): string {
@@ -242,10 +239,10 @@ function activitySnippet(text: string): string {
 /** Static compact lines (tool-result stream, subagent_status, /subagents). */
 function compactLines(run: RunSnapshot): string[] {
 	const lines: string[] = [];
-	for (const task of run.tasks.slice(0, 8)) {
+	for (const task of run.tasks.slice(0, MAX_TASKS)) {
 		lines.push(taskLine(task));
 	}
-	if (run.tasks.length > 8) lines.push(`… +${run.tasks.length - 8} more`);
+	if (run.tasks.length > MAX_TASKS) lines.push(`… +${run.tasks.length - MAX_TASKS} more`);
 	return lines;
 }
 /**
@@ -273,9 +270,9 @@ class SubagentsWidget implements Component {
 		const active = !TERMINAL.includes(run.status);
 		const head = active ? "accent" : "dim";
 		const lines = [truncateToWidth(`${this.theme.fg(head, active ? "●" : "○")} ${this.theme.fg(head, `Subagents (${done}/${run.tasks.length})`)}`, width, "…")];
-		const visible = run.tasks.slice(0, 8);
+		const visible = run.tasks.slice(0, MAX_TASKS);
 		visible.forEach((task, i) => {
-			const last = i === visible.length - 1 && run.tasks.length <= 8;
+			const last = i === visible.length - 1 && run.tasks.length <= MAX_TASKS;
 			const conn = this.theme.fg("dim", last ? "└─" : "├─");
 			const activity =
 				!TERMINAL.includes(task.status) && task.lastActivity
@@ -284,7 +281,7 @@ class SubagentsWidget implements Component {
 			const line = `${statusIcon(task.status)} ${task.agent} · ${activity}${taskStatsWithUsage(task)} · ${taskTimer(task)}`;
 			lines.push(truncateToWidth(`${conn} ${line}`, width, "…"));
 		});
-		if (run.tasks.length > 8) lines.push(`${this.theme.fg("dim", "└─")} ${this.theme.fg("dim", `+${run.tasks.length - 8} more`)}`);
+		if (run.tasks.length > MAX_TASKS) lines.push(`${this.theme.fg("dim", "└─")} ${this.theme.fg("dim", `+${run.tasks.length - MAX_TASKS} more`)}`);
 		return lines;
 	}
 }
@@ -483,19 +480,16 @@ class SubagentManager {
 	private makeChildHandlers(run: RunSnapshot, task: TaskSnapshot, ctx: ExtensionContext): ChildHandlers {
 		return {
 			onAskParent: async (_taskId, question) => {
-				this.updateTask(run, task, { status: "awaiting_parent", intercomQuestion: question }, ctx);
+				this.updateTask(run, task, { status: "awaiting_parent" }, ctx);
 				this.liveChildren.get(`${run.id}:${task.id}`)?.touchWatchdog();
 				this.notifyParent(run, "asked", { taskId: task.id, question });
 				const reply = await this.awaitParentReply(run.id, task.id);
-				this.updateTask(run, task, { status: "running", intercomQuestion: undefined }, ctx);
+				this.updateTask(run, task, { status: "running" }, ctx);
 				this.liveChildren.get(`${run.id}:${task.id}`)?.touchWatchdog();
 				return reply;
 			},
 			onNotifyParent: (_taskId, message, level) => {
 				this.emit("subagent:intercom", { runId: run.id, taskId: task.id, kind: "notify", level, message });
-			},
-			onUpdateProgress: (_taskId, phase, note) => {
-				this.updateTask(run, task, { progressPhase: phase + (note ? ` — ${note}` : "") }, ctx);
 			},
 			onSendMessage: (_taskId, to, text) => {
 				if (to === "leader") {
@@ -555,7 +549,7 @@ class SubagentManager {
 			if (modelRef && !model) throw new Error(`Model not found: ${modelRef.provider}/${modelRef.modelId}`);
 
 			const subagentInstruction = run.allowIntercom
-				? "You are running as a subagent. Do not call subagent/delegation tools unless the parent explicitly asks. Return a concise final answer. You MAY use ask_parent only when truly blocked on information only the parent has; notify_parent for one-way updates; send_agent_message/poll_agent_messages to coordinate with sibling subagents."
+				? `You are running as a subagent. Do not call subagent/delegation tools unless the parent explicitly asks. Return a concise final answer. You MAY use ask_parent only when truly blocked on information only the parent has; notify_parent for one-way updates; send_agent_message/poll_agent_messages to coordinate with siblings. Your mailbox address and siblings: ${task.roster ?? "(none)"}. Use the exact task ids (e.g. task_2) as send_agent_message targets.`
 				: "You are running as a subagent. Do not call subagent/delegation tools unless the parent explicitly asks. Return a concise final answer for the parent agent.";
 
 			const loader = new DefaultResourceLoader({
@@ -600,7 +594,7 @@ class SubagentManager {
 				if (event.type === "tool_execution_start") {
 					this.updateTask(run, task, { toolCalls: task.toolCalls + 1, lastActivity: `${event.toolName}${argsSuffix(event.args)}` }, ctx, onUpdate);
 				} else if (event.type === "tool_execution_end") {
-					this.updateTask(run, task, {}, ctx, onUpdate);
+					this.scheduleWidget(run, ctx, onUpdate);
 				} else if (event.type === "message_end") {
 					const message = event.message as AssistantMessage;
 					updateUsageFromMessage(task, message);
@@ -682,7 +676,7 @@ class SubagentManager {
 
 		const mode: RunMode = hasChain ? "chain" : hasTasks ? "parallel" : "single";
 		const inputs: TaskInput[] = hasSingle
-			? [{ agent: params.agent as string, desc: params.desc, task: params.task as string, prompt: params.prompt, write: params.write, model: params.model, thinking: params.thinking, tools: params.tools, maxRuntimeMs: params.maxRuntimeMs }]
+			? [{ agent: params.agent as string, task: params.task as string, prompt: params.prompt, write: params.write, model: params.model, thinking: params.thinking, tools: params.tools, maxRuntimeMs: params.maxRuntimeMs }]
 			: hasTasks
 				? params.tasks!
 				: params.chain!;
@@ -711,6 +705,12 @@ class SubagentManager {
 			})),
 			aggregateUsage: emptyUsage(),
 		};
+		// Roster: each child learns its own address + sibling addresses so
+		// send_agent_message/poll_agent_messages can be used reliably.
+		const roster = run.tasks.map((t) => `${t.id} (${t.agent})`).join(", ");
+		for (const task of run.tasks) {
+			task.roster = roster;
+		}
 		run.tasks.forEach((t) => (t.runId = run.id));
 		this.runs.set(run.id, run);
 		this.settlers.set(run.id, () => {});
@@ -729,7 +729,12 @@ class SubagentManager {
 			for (let i = 0; i < inputs.length; i++) {
 				const task = run.tasks[i]!;
 				if (TERMINAL.includes(task.status)) continue; // canceled
-				const input = { ...inputs[i]!, task: inputs[i]!.task.replace(/\{previous\}/g, previous) };
+				const rawTask = inputs[i]!.task;
+				let next = rawTask.replace(/\{previous\}/g, previous);
+				if (previous === "" && rawTask.includes("{previous}")) {
+					next += "\n\n(Note: {previous} was empty — no prior step output existed yet.)";
+				}
+				const input = { ...inputs[i]!, task: next };
 				task.task = input.task;
 				await this.runChild(run, task, input, ctx, signal, onUpdate);
 				if (task.status !== "completed") break;
@@ -774,7 +779,6 @@ class SubagentManager {
 		for (const [key, child] of this.liveChildren) {
 			if (key.startsWith(`${runId}:`)) {
 				child.abort();
-				aborted += 1;
 			}
 		}
 		for (const task of run.tasks) {
@@ -820,7 +824,6 @@ let eventSeq = 0;
 const TaskItem = Type.Object({
 	id: Type.Optional(Type.String({ description: "Optional stable task id" })),
 	agent: Type.String({ description: "Name you invent for this subagent" }),
-	desc: Type.Optional(Type.String({ description: "One-line description of this agent's role" })),
 	task: Type.String({ description: "Task for this agent" }),
 	prompt: Type.Optional(Type.String({ description: "System prompt defining this agent's behavior. Optional — a minimal default is used." })),
 	write: Type.Optional(Type.Boolean({ description: "true = write toolset (read, bash, edit, write); default false = read-only (read, grep, find, ls)" })),
@@ -832,7 +835,6 @@ const TaskItem = Type.Object({
 
 type SubagentParamsShape = {
 	agent?: string;
-	desc?: string;
 	task?: string;
 	prompt?: string;
 	write?: boolean;
@@ -849,7 +851,6 @@ type SubagentParamsShape = {
 
 const SubagentParams = Type.Object({
 	agent: Type.Optional(Type.String({ description: "Name you invent for this subagent (single mode)" })),
-	desc: Type.Optional(Type.String({ description: "One-line description (single mode)" })),
 	task: Type.Optional(Type.String({ description: "Task (single mode)" })),
 	prompt: Type.Optional(Type.String({ description: "System prompt for this agent (single mode)" })),
 	write: Type.Optional(Type.Boolean({ description: "true = write toolset; default false = read-only (single mode)" })),

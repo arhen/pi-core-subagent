@@ -1,10 +1,9 @@
 /**
  * Child-session tools + watchdog.
  *
- * When `allowIntercom: true`, children get five talk tools:
+ * When `allowIntercom: true`, children get four talk tools:
  *   - ask_parent            blocking Q&A with the leader (parent)
  *   - notify_parent         one-way message to the leader
- *   - update_progress       phase hint for the widget
  *   - send_agent_message    one-way message to another subagent's mailbox
  *                           (`to` = target task id in this run, or "leader")
  *   - poll_agent_messages   drain this subagent's mailbox
@@ -23,12 +22,11 @@ export interface MailboxMessage {
 }
 
 /** Child talk tools injected when allowIntercom: true. */
-export const CHILD_TALK_TOOLS = ["ask_parent", "notify_parent", "update_progress", "send_agent_message", "poll_agent_messages"] as const;
+export const CHILD_TALK_TOOLS = ["ask_parent", "notify_parent", "send_agent_message", "poll_agent_messages"] as const;
 
 export interface ChildHandlers {
 	onAskParent(taskId: string, question: string): Promise<string>;
 	onNotifyParent(taskId: string, message: string, level: "info" | "warning" | "error"): void;
-	onUpdateProgress(taskId: string, phase: string, note?: string): void;
 	/** Route a child→child message. Returns false when the target is unknown. */
 	onSendMessage(taskId: string, to: string, text: string): boolean;
 	/** Drain the mailbox (returns and clears pending messages). */
@@ -69,21 +67,6 @@ export function createChildTools(taskId: string, handlers: ChildHandlers): ToolD
 				const { message, level } = params as { message: string; level?: "info" | "warning" | "error" };
 				handlers.onNotifyParent(taskId, message, level ?? "info");
 				return { content: [{ type: "text" as const, text: "Sent." }], details: {} };
-			},
-		},
-		{
-			name: "update_progress",
-			label: "Update Progress",
-			description: "Report your current work phase to the parent. Lightweight, non-blocking; helps the parent track progress.",
-			promptSnippet: "Report current work phase to the parent.",
-			parameters: Type.Object({
-				phase: Type.String({ description: "Short phase label, e.g. 'reviewing auth module'" }),
-				note: Type.Optional(Type.String({ description: "Optional extra detail" })),
-			}),
-			async execute(_toolCallId, params) {
-				const { phase, note } = params as { phase: string; note?: string };
-				handlers.onUpdateProgress(taskId, phase, note);
-				return { content: [{ type: "text" as const, text: "Progress updated." }], details: {} };
 			},
 		},
 		{
