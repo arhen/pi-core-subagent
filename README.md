@@ -1,4 +1,4 @@
-# minimalist-subagents
+# pi-minimalist-subagent
 
 Minimalist pi extension: **fast in-process subagents** with single / parallel / chain modes, background runs, cancellation, intercom (child↔leader) and an agent↔agent mailbox.
 
@@ -6,7 +6,7 @@ Built for one job: delegate work to isolated subagents **without bloating the pa
 
 ## Design principles
 
-- **No agent files, no discovery.** The leader defines every subagent inline, per call: name, system prompt, toolset. Nothing is loaded from disk.
+- **No agent files required, no discovery overhead.** The leader defines every subagent inline per call — name, system prompt, toolset. Existing files (`.agents/`, `.pi/agents/`, `~/.pi/agent/agents/`) are *looked up by name only when no inline prompt is given*; nothing is ever created or scanned per request.
 - **Two toolsets only.** Read-only (`read, grep, find, ls` — default) or write (`read, grep, find, ls, bash, edit, write` — `write: true`). No per-agent tool config surface.
 - **In-process** — children are `AgentSession`s in the same runtime. No process spawn, no context bleed.
 - **Zero parent-context injection.** No catalog, no context hook. 6 slim tools total.
@@ -16,8 +16,8 @@ Built for one job: delegate work to isolated subagents **without bloating the pa
 ## Install
 
 ```sh
-pi install /path/to/minimalist-subagents
-# or: npm publish && pi install npm:minimalist-subagents
+pi install npm:pi-minimalist-subagent
+# or locally: pi install /path/to/pi-subagents
 ```
 
 > Conflicts with other extensions that register a `subagent` tool (e.g. `@gotgenes/pi-subagents`, `@narumitw/pi-subagents`). Run one at a time.
@@ -29,10 +29,8 @@ Define agents inline (never creates files). If a task has **no inline `prompt`**
 ```json
 {
   "agent": "api-reviewer",
-  "desc": "Read-only reviewer focused on the upload endpoint",
   "prompt": "You are a strict API reviewer. Check auth, rate limiting, and error handling. Cite file:line.",
-  "task": "Review src/api/upload.ts",
-  "write": false
+  "task": "Review src/api/upload.ts"
 }
 ```
 
@@ -75,7 +73,7 @@ Background + intercom:
 
 | Tool | Purpose |
 |---|---|
-| `subagent` | single / `tasks` (parallel) / `chain` (`{previous}`); `background:true` fire-and-forget; `allowIntercom:true` enables child talk tools |
+| `subagent` | single / `tasks` (parallel) / `chain` (`{previous}`); `background:true` fire-and-forget; `allowIntercom:true` enables child talk tools; `notifyPerTask` (default on) wakes you as each task completes |
 | `subagent_status` | live per-task snapshot (non-blocking) |
 | `subagent_result` | full output of a run or one task |
 | `await_subagent` | block until a run finishes (optional `timeoutMs`) |
@@ -84,7 +82,7 @@ Background + intercom:
 
 ### Per-task fields
 
-`agent` (name you invent, or an existing file's name — required), `task` (required), `prompt` (system prompt, optional — falls back to file lookup, then a minimal default), `write` (toolset, default read-only), plus optional `model` (`provider/model-id`), `thinking` (`off|minimal|low|medium|high|xhigh|max`), `tools` (explicit allowlist, overrides everything), `maxRuntimeMs`, `id`.
+`agent` (name you invent, or an existing file's name — required), `task` (required), `prompt` (system prompt, optional — falls back to file lookup, then a minimal default), `write` (toolset, default read-only), plus optional `model` (`provider/model-id`), `thinking` (`off|minimal|low|medium|high|xhigh|max`), `tools` (explicit allowlist, overrides everything), `maxRuntimeMs`, `id`. Top-level only: `background`, `notifyPerTask`, `allowIntercom`, `concurrency`.
 
 ### Child talk tools (when `allowIntercom: true`)
 
