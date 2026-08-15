@@ -194,8 +194,8 @@ function fmtTokens(n: number): string {
 function formatUsage(usage: UsageStats): string {
 	const parts: string[] = [];
 	if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
-	if (usage.input) parts.push(`in ${fmtTokens(usage.input)}`);
-	if (usage.output) parts.push(`out ${fmtTokens(usage.output)}`);
+	if (usage.input) parts.push(`↑ ${fmtTokens(usage.input)}`);
+	if (usage.output) parts.push(`↓ ${fmtTokens(usage.output)}`);
 	if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
 	return parts.join(" · ");
 }
@@ -220,10 +220,13 @@ function taskDuration(task: TaskSnapshot): string {
 function taskStats(task: TaskSnapshot): string {
 	return `${task.toolCalls ?? 0} tools · ${taskDuration(task)}`;
 }
-function taskLine(task: TaskSnapshot): string {
+function taskStatsWithUsage(task: TaskSnapshot): string {
 	const stats = `${task.toolCalls ?? 0} tools · ${taskDuration(task)}`;
 	const usage = formatUsage(task.usage);
-	return `${statusIcon(task.status)} ${task.agent} · ${stats}${usage ? ` · ${usage}` : ""}`;
+	return `${stats}${usage ? ` · ${usage}` : ""}`;
+}
+function taskLine(task: TaskSnapshot): string {
+	return `${statusIcon(task.status)} ${task.agent} · ${taskStatsWithUsage(task)}`;
 }
 function argsSuffix(args: unknown): string {
 	try {
@@ -278,9 +281,10 @@ class SubagentsWidget implements Component {
 			const conn = this.theme.fg("dim", last ? "└─" : "├─");
 			const activity =
 				!TERMINAL.includes(task.status) && task.lastActivity
-					? ` ${this.theme.fg("dim", `→ ${task.lastActivity}`)}`
+					? `${this.theme.fg("dim", `→ ${task.lastActivity}`)} · `
 					: "";
-			lines.push(truncateToWidth(`${conn} ${taskLine(task)}${activity}`, width, "…"));
+			const line = `${statusIcon(task.status)} ${task.agent} · ${activity}${taskStatsWithUsage(task)}`;
+			lines.push(truncateToWidth(`${conn} ${line}`, width, "…"));
 		});
 		if (run.tasks.length > 8) lines.push(`${this.theme.fg("dim", "└─")} ${this.theme.fg("dim", `+${run.tasks.length - 8} more`)}`);
 		return lines;
