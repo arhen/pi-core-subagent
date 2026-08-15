@@ -103,6 +103,8 @@ interface RunSnapshot {
 	concurrency: number;
 	/** True once the parent awaited this run — completion notices are redundant then. */
 	awaited?: boolean;
+	/** Wake the parent (queued follow-up turn) as each task completes. Default true. */
+	notifyPerTask: boolean;
 	tasks: TaskSnapshot[];
 	aggregateUsage: UsageStats;
 }
@@ -300,6 +302,14 @@ function makeSummary(run: RunSnapshot): string {
 	// Ceiling on the WHOLE summary — 16 tasks × 24KB would otherwise flood the parent context.
 	return truncateText(lines.join("\n"));
 }
+/** Per-task notice: one task's outcome, small. Full output stays out of parent context. */
+function makeTaskNotice(run: RunSnapshot, task: TaskSnapshot, kind: string): string {
+	const detail = task.error ? task.error : truncateText(task.finalText || "(no output)", 200);
+	return [
+		`Task ${task.agent} (${task.id}) ${kind} in run ${run.id}: ${detail}`,
+		`Use subagent_result(runId: "${run.id}", taskId: "${task.id}") for full output.`,
+	].join("\n");
+}
 /** Notification: 3 lines max. Full output stays out of parent context. */
 function makeNotice(run: RunSnapshot, kind: string): string {
 	const lines = [`Background subagent run ${run.id} ${kind}: ${run.tasks.filter((t) => t.status === "completed").length}/${run.tasks.length} succeeded.`];
@@ -412,6 +422,17 @@ class SubagentManager {
 
 	private emit(type: string, payload: Record<string, unknown>): void {
 		this.pi.events.emit(type, { type, timestamp: Date.now(), ...payload });
+	}
+
+	/** Per-task wake-up: queued follow-up so the parent can interleave responses. */
+	private notifyTask(run: RunSnapshot, task: TaskSnapshot, kind: "completed" | "failed" | "aborted"): void {
+		const body = makeTaskNotice(run, task, kind);
+		try {
+			this.pi.sendUserMessage(body, { deliverAs: "followUp" });
+		} catch {
+			/* parent mid-stream; consumers can poll subagent_status */
+		}
+		this.emit("subagent:notification", { runId: run.id, taskId: task.id, kind, body });
 	}
 
 	/** Wake the parent with a 3-line notice. Full text stays out of context.
@@ -725,6 +746,7 @@ class SubagentManager {
 			status: "queued",
 			background: Boolean(params.background),
 			allowIntercom: Boolean(params.allowIntercom),
+			notifyPerTask: params.notifyPerTask ?? true,
 			createdAt: Date.now(),
 			concurrency: Math.max(1, Math.min(params.concurrency ?? DEFAULT_CONCURRENCY, MAX_CONCURRENCY)),
 			tasks: inputs.map((input, index) => ({
@@ -775,6 +797,9 @@ class SubagentManager {
 				const input = { ...inputs[i]!, task: next };
 				task.task = input.task;
 				await this.runChild(run, task, input, ctx, signal, onUpdate);
+				if (run.notifyPerTask && TERMINAL.includes(task.status)) {
+					this.notifyTask(run, task, task.status as "completed" | "failed" | "aborted");
+				}
 				if (task.status !== "completed") break;
 				previous = task.finalText ?? "";
 			}
@@ -782,6 +807,9 @@ class SubagentManager {
 			await mapWithConcurrency(run.tasks, run.mode === "single" ? 1 : run.concurrency, async (task) => {
 				const index = run.tasks.indexOf(task);
 				await this.runChild(run, task, inputs[index]!, ctx, signal, onUpdate);
+				if (run.notifyPerTask && TERMINAL.includes(task.status)) {
+					this.notifyTask(run, task, task.status as "completed" | "failed" | "aborted");
+				}
 			});
 		}
 
