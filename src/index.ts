@@ -100,6 +100,8 @@ interface RunSnapshot {
 	startedAt?: number;
 	endedAt?: number;
 	concurrency: number;
+	/** True once the parent awaited this run — completion notices are redundant then. */
+	awaited?: boolean;
 	tasks: TaskSnapshot[];
 	aggregateUsage: UsageStats;
 }
@@ -329,13 +331,16 @@ class SubagentManager {
 		this.pi.events.emit(type, { type, timestamp: Date.now(), ...payload });
 	}
 
-	/** Wake the parent with a 3-line notice. Full text stays out of context. */
+	/** Wake the parent with a 3-line notice. Full text stays out of context.
+	 *  deliverAs followUp queues the message if the parent is mid-stream
+	 *  (e.g. inside await_subagent) instead of throwing/aborting. */
 	private notifyParent(run: RunSnapshot, kind: "completed" | "failed" | "aborted" | "asked", extra?: { taskId?: string; question?: string }): void {
+		if (kind !== "asked" && run.awaited) return; // parent already got the result via await_subagent
 		const body = kind === "asked"
 			? `A background subagent is asking you a question (task ${extra?.taskId}): ${extra?.question ?? ""}\nReply with reply_subagent(runId: "${run.id}", taskId: "${extra?.taskId}", message: ...).`
 			: makeNotice(run, kind);
 		try {
-			this.pi.sendUserMessage(body);
+			this.pi.sendUserMessage(body, { deliverAs: "followUp" });
 		} catch {
 			/* parent mid-stream; consumers can poll subagent_status */
 		}
@@ -695,6 +700,7 @@ class SubagentManager {
 	awaitRun(runId: string, timeoutMs?: number): Promise<RunSnapshot | undefined> {
 		const run = this.runs.get(runId);
 		if (!run) return Promise.resolve(undefined);
+		run.awaited = true;
 		if (TERMINAL.includes(run.status)) return Promise.resolve(cloneRun(run));
 		const settled = new Promise<RunSnapshot | undefined>((resolve) => {
 			const prev = this.settlers.get(runId);
