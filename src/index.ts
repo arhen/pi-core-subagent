@@ -150,8 +150,12 @@ function getParentSessionFile(ctx: ExtensionContext): string | undefined {
 		return undefined;
 	}
 }
+/**
+ * pi 0.84 StopReason enum: "stop" is NORMAL completion (was "end" in older pi).
+ * Only length/error/aborted/deferred/pending/toolUse-as-final are failures.
+ */
 export function classifyFailure(stopReason: string | undefined, errorMessage?: string): { status: "failed" | "aborted"; message: string } | undefined {
-	if (!stopReason || stopReason === "end") return undefined;
+	if (!stopReason || stopReason === "stop" || stopReason === "end") return undefined;
 	if (stopReason === "aborted") return { status: "aborted", message: errorMessage || "Subagent was aborted." };
 	return { status: "failed", message: errorMessage || `Subagent ended with stopReason "${stopReason}".` };
 }
@@ -211,7 +215,7 @@ function makeSummary(run: RunSnapshot): string {
 	const succeeded = run.tasks.filter((t) => t.status === "completed").length;
 	const failed = run.tasks.filter((t) => t.status === "failed").length;
 	const aborted = run.tasks.filter((t) => t.status === "aborted").length;
-	const lines = [`Subagents ${run.mode}${run.background ? " (background)" : ""} finished: ${succeeded}/${run.tasks.length} succeeded${failed ? `, ${failed} failed` : ""}${aborted ? `, ${aborted} aborted` : ""}.`];
+	const lines = [`Run ${run.id}: Subagents ${run.mode}${run.background ? " (background)" : ""} finished: ${succeeded}/${run.tasks.length} succeeded${failed ? `, ${failed} failed` : ""}${aborted ? `, ${aborted} aborted` : ""}.`];
 	const usage = formatUsage(run.aggregateUsage);
 	if (usage) lines.push(`Usage: ${usage}`);
 	for (const task of run.tasks) {

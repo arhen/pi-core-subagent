@@ -8,7 +8,8 @@ import { createWatchdog } from "../src/child.ts";
 import { createMailbox } from "../src/mailbox.ts";
 
 describe("classifyFailure", () => {
-	test("end → no failure", () => {
+	test("stop/end/undefined → no failure (normal completion)", () => {
+		expect(classifyFailure("stop")).toBeUndefined();
 		expect(classifyFailure("end")).toBeUndefined();
 		expect(classifyFailure(undefined)).toBeUndefined();
 	});
