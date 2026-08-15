@@ -359,6 +359,7 @@ class SubagentManager {
 		this.pendingReplies.clear();
 		this.runControllers.clear();
 		this.mailboxes = createMailbox();
+		this.widgetTui = null; // force re-registration on the next session
 		if (this.widgetTimer) clearTimeout(this.widgetTimer);
 		this.widgetTimer = undefined;
 		this.widgetRun = undefined;
@@ -375,10 +376,15 @@ class SubagentManager {
 			if (!existsSync(sidecar)) return;
 			const raw = JSON.parse(readFileSync(sidecar, "utf-8"));
 			if (!Array.isArray(raw)) return;
-			runs = (raw as RunSnapshot[]).map((run) => ({
-				...run,
-				tasks: run.tasks.map((t) => (TERMINAL.includes(t.status) ? t : { ...t, status: "aborted" as TaskStatus, error: t.error || "Interrupted by session reload" })),
-			}));
+			runs = (raw as RunSnapshot[]).map((run) => {
+				const interrupted = run.tasks.some((t) => !TERMINAL.includes(t.status));
+				return {
+					...run,
+					status: interrupted ? ("aborted" as RunStatus) : run.status,
+					endedAt: interrupted ? Date.now() : run.endedAt,
+					tasks: run.tasks.map((t) => (TERMINAL.includes(t.status) ? t : { ...t, status: "aborted" as TaskStatus, error: t.error || "Interrupted by session reload" })),
+				};
+			});
 		} catch {
 			return;
 		}
@@ -431,9 +437,10 @@ class SubagentManager {
 	private scheduleWidget(run: RunSnapshot | undefined, ctx?: ExtensionContext, onUpdate?: (partial: any) => void): void {
 		if (run) this.widgetRun = run;
 		if (this.widgetTimer || !this.widgetRun) return;
-		const target = this.widgetRun;
 		this.widgetTimer = setTimeout(() => {
 			this.widgetTimer = undefined;
+			const target = this.widgetRun; // read at fire: never render a stale run
+			if (!target) return;
 			if (ctx?.hasUI) {
 				ctx.ui.setStatus("subagents", `subagents: ${target.tasks.filter((t) => !TERMINAL.includes(t.status)).length} running`);
 				this.ensureWidget(ctx);
@@ -608,13 +615,15 @@ class SubagentManager {
 					this.scheduleWidget(run, ctx, onUpdate);
 				} else if (event.type === "message_end") {
 					const message = event.message as AssistantMessage;
-					updateUsageFromMessage(task, message);
-					const text = getFirstText(message);
-					if (text) {
-						task.finalText = truncateText(text);
-						task.lastActivity = activitySnippet(text);
+					if (message?.role === "assistant") {
+						updateUsageFromMessage(task, message);
+						const text = getFirstText(message);
+						if (text) {
+							task.finalText = truncateText(text);
+							task.lastActivity = activitySnippet(text);
+						}
+						pendingFailure = classifyFailure(message.stopReason, message.errorMessage);
 					}
-					pendingFailure = classifyFailure(message.stopReason, message.errorMessage);
 					this.updateRun(run, ctx, onUpdate);
 				} else if (event.type === "agent_end") {
 					if (event.willRetry) {
@@ -796,9 +805,25 @@ class SubagentManager {
 
 	startInBackground(params: SubagentParamsShape, ctx: ExtensionContext): RunDetails {
 		const { run, inputs } = this.createRun(params, ctx);
-		void this.executeTasks(run, inputs, ctx, undefined, undefined).then(() => {
-			this.notifyParent(run, run.status === "completed" ? "completed" : run.status === "aborted" ? "aborted" : "failed");
-		});
+		void this.executeTasks(run, inputs, ctx, undefined, undefined)
+			.then(() => {
+				this.notifyParent(run, run.status === "completed" ? "completed" : run.status === "aborted" ? "aborted" : "failed");
+			})
+			.catch((err) => {
+				// Never leave a background run unsettled: mark failed, settle, notify.
+				run.status = "failed";
+				run.endedAt = Date.now();
+				for (const task of run.tasks) {
+					if (!TERMINAL.includes(task.status)) {
+						task.status = "failed";
+						task.error = task.error || String(err instanceof Error ? err.message : err);
+						task.endedAt = Date.now();
+					}
+				}
+				this.settleRun(run.id, run);
+				this.runControllers.delete(run.id);
+				this.notifyParent(run, "failed");
+			});
 		return { run: cloneRun(run), background: true };
 	}
 
