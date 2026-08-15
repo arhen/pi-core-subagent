@@ -21,7 +21,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import { Container, Markdown, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { createChildTools, createWatchdog, type ChildHandlers } from "./child.ts";
@@ -42,8 +42,6 @@ type TaskStatus = "queued" | "starting" | "running" | "awaiting_parent" | "compl
 type RunStatus = "queued" | "running" | "awaiting_parent" | "completed" | "failed" | "aborted";
 
 const TERMINAL: TaskStatus[] = ["completed", "failed", "aborted"];
-const SPINNER = "⠙";
-const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]; // pi loading icon
 
 interface UsageStats {
 	input: number;
@@ -88,6 +86,8 @@ interface TaskSnapshot {
 	currentTool?: { toolName: string };
 	progressPhase?: string;
 	intercomQuestion?: string;
+	toolCalls: number;
+	lastActivity?: string;
 	usage: UsageStats;
 	finalText?: string;
 	error?: string;
@@ -202,39 +202,61 @@ function statusIcon(status: TaskStatus | RunStatus): string {
 	if (status === "aborted") return "⏹";
 	if (status === "awaiting_parent") return "❓";
 	if (status === "queued") return "○";
-	return SPINNER;
+	return "•";
+}
+function fmtDuration(ms: number | undefined): string {
+	if (ms === undefined || !Number.isFinite(ms)) return "–";
+	const s = Math.max(0, Math.round(ms / 1000));
+	return s >= 60 ? `${Math.floor(s / 60)}m${s % 60}s` : `${s}s`;
+}
+function taskDuration(task: TaskSnapshot): string {
+	if (task.startedAt === undefined) return "–";
+	const end = task.endedAt ?? Date.now();
+	return fmtDuration(end - task.startedAt);
+}
+function taskStats(task: TaskSnapshot): string {
+	return `${task.toolCalls ?? 0} tools · ${taskDuration(task)}`;
+}
+function taskLine(task: TaskSnapshot): string {
+	const stats = `${task.toolCalls ?? 0} tools · ${taskDuration(task)}`;
+	const usage = formatUsage(task.usage);
+	return `${statusIcon(task.status)} ${task.agent} · ${stats}${usage ? ` · ${usage}` : ""}`;
+}
+function argsSuffix(args: unknown): string {
+	try {
+		const s = JSON.stringify(args);
+		if (!s || s === "{}") return "";
+		return ` ${s.length > 60 ? `${s.slice(0, 60)}…` : s}`;
+	} catch {
+		return "";
+	}
+}
+function activitySnippet(text: string): string {
+	const flat = text.replace(/\s+/g, " ").trim();
+	return flat.length > 90 ? `${flat.slice(0, 90)}…` : flat;
 }
 /** Static compact lines (tool-result stream, subagent_status, /subagents). */
 function compactLines(run: RunSnapshot): string[] {
 	const lines: string[] = [];
 	for (const task of run.tasks.slice(0, 8)) {
-		lines.push(`${statusIcon(task.status)} ${task.agent}`);
+		lines.push(taskLine(task));
 	}
 	if (run.tasks.length > 8) lines.push(`… +${run.tasks.length - 8} more`);
 	return lines;
 }
 /**
- * Above-editor widget in todo style — tree with count heading:
+ * Above-editor widget, todo-tree style:
  *   ● Subagents (0/1)
- *   ├─ ⠋ code-sleuth
- *   └─ ✓ reviewer
- * Active rows animate with pi's own spinner (requestRender-driven).
+ *   ├─ • code-sleuth · 4 tools · 12s
+ *   │    → read src/auth.ts
+ *   └─ ✓ reviewer · 6 tools · 44s
+ * Static icons (no animation); latest activity + tool count + runtime per agent.
  */
 class SubagentsWidget implements Component {
-	private frame = 0;
-	private timer: ReturnType<typeof setInterval> | undefined;
-
 	constructor(
 		private readonly getRun: () => RunSnapshot | undefined,
 		private readonly theme: Theme,
-		private readonly tui: TUI,
-		private readonly onDispose?: () => void,
-	) {
-		this.timer = setInterval(() => {
-			this.frame += 1;
-			this.tui.requestRender();
-		}, 100);
-	}
+	) {}
 
 	invalidate(): void {
 		// no cached strings; render() reads live state
@@ -246,21 +268,19 @@ class SubagentsWidget implements Component {
 		const done = run.tasks.filter((t) => TERMINAL.includes(t.status)).length;
 		const active = !TERMINAL.includes(run.status);
 		const head = active ? "accent" : "dim";
-		const lines = [`${this.theme.fg(head, active ? "●" : "○")} ${this.theme.fg(head, `Subagents (${done}/${run.tasks.length})`)}`];
+		const lines = [truncateToWidth(`${this.theme.fg(head, active ? "●" : "○")} ${this.theme.fg(head, `Subagents (${done}/${run.tasks.length})`)}`, width, "…")];
 		const visible = run.tasks.slice(0, 8);
 		visible.forEach((task, i) => {
 			const last = i === visible.length - 1 && run.tasks.length <= 8;
-			const icon = TERMINAL.includes(task.status) ? statusIcon(task.status) : SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length]!;
-			lines.push(`${this.theme.fg("dim", last ? "└─" : "├─")} ${icon} ${this.theme.fg("muted", task.agent)}`);
+			const conn = this.theme.fg("dim", last ? "└─" : "├─");
+			const activity =
+				!TERMINAL.includes(task.status) && task.lastActivity
+					? ` ${this.theme.fg("dim", `→ ${task.lastActivity}`)}`
+					: "";
+			lines.push(truncateToWidth(`${conn} ${taskLine(task)}${activity}`, width, "…"));
 		});
 		if (run.tasks.length > 8) lines.push(`${this.theme.fg("dim", "└─")} ${this.theme.fg("dim", `+${run.tasks.length - 8} more`)}`);
-		return lines.slice(0, Math.max(1, width));
-	}
-
-	dispose(): void {
-		if (this.timer) clearInterval(this.timer);
-		this.timer = undefined;
-		this.onDispose?.();
+		return lines;
 	}
 }
 /** Blocking-call summary: full text, because the model asked for it. */
@@ -436,9 +456,7 @@ class SubagentManager {
 			"subagents",
 			(tui, theme) => {
 				this.widgetTui = tui;
-				return new SubagentsWidget(() => this.widgetRun, theme, tui, () => {
-					this.widgetTui = null;
-				});
+				return new SubagentsWidget(() => this.widgetRun, theme);
 			},
 			{ placement: "aboveEditor" },
 		);
@@ -573,14 +591,17 @@ class SubagentManager {
 					this.emit("subagent:session-event", { runId: run.id, taskId: task.id, seq: eventSeq++, event: { type: event.type } });
 				}
 				if (event.type === "tool_execution_start") {
-					this.updateTask(run, task, { currentTool: { toolName: event.toolName } }, ctx, onUpdate);
+					this.updateTask(run, task, { toolCalls: task.toolCalls + 1, lastActivity: `${event.toolName}${argsSuffix(event.args)}` }, ctx, onUpdate);
 				} else if (event.type === "tool_execution_end") {
-					this.updateTask(run, task, { currentTool: undefined }, ctx, onUpdate);
+					this.updateTask(run, task, {}, ctx, onUpdate);
 				} else if (event.type === "message_end") {
 					const message = event.message as AssistantMessage;
 					updateUsageFromMessage(task, message);
 					const text = getFirstText(message);
-					if (text) task.finalText = truncateText(text);
+					if (text) {
+						task.finalText = truncateText(text);
+						task.lastActivity = activitySnippet(text);
+					}
 					pendingFailure = classifyFailure(message.stopReason, message.errorMessage);
 					this.updateRun(run, ctx, onUpdate);
 				} else if (event.type === "agent_end") {
@@ -617,7 +638,7 @@ class SubagentManager {
 			if (pendingFailure) throw failureError(pendingFailure);
 
 			const finalText = task.finalText || truncateText((child.messages as AssistantMessage[]).map(getFirstText).filter(Boolean).at(-1) || "");
-			this.updateTask(run, task, { status: "completed", finalText, currentTool: undefined, endedAt: Date.now() }, ctx, onUpdate);
+			this.updateTask(run, task, { status: "completed", finalText, endedAt: Date.now() }, ctx, onUpdate);
 		} catch (err) {
 			if (timeout) clearTimeout(timeout);
 			const aborted = signal?.aborted;
@@ -630,7 +651,6 @@ class SubagentManager {
 			this.updateTask(run, task, {
 				status: aborted ? "aborted" : (subagentStatus as TaskStatus) ?? "failed",
 				error: err instanceof Error ? err.message : String(err),
-				currentTool: undefined,
 				endedAt: Date.now(),
 			}, ctx, onUpdate);
 		} finally {
@@ -679,6 +699,7 @@ class SubagentManager {
 				model: input.model,
 				thinking: input.thinking,
 				tools: input.tools ?? (input.write ? WRITE_TOOLS : READONLY_TOOLS),
+				toolCalls: 0,
 				usage: emptyUsage(),
 			})),
 			aggregateUsage: emptyUsage(),
@@ -919,7 +940,7 @@ export default function (pi: ExtensionAPI) {
 			if (!run) return new Text(result.content[0]?.type === "text" ? result.content[0].text : "", 0, 0);
 			const header = `${statusIcon(run.status)} ${theme.fg("toolTitle", theme.bold(`subagents ${run.mode}${run.background ? " (bg)" : ""}`))} ${theme.fg("accent", `${run.tasks.filter((t) => t.status === "completed").length}/${run.tasks.length}`)} ${theme.fg("muted", run.status)}`;
 			if (!expanded) {
-				const lines = [header, ...run.tasks.map((task) => `  ${statusIcon(task.status)} ${task.agent}: ${task.status}${task.currentTool ? ` · ${task.currentTool.toolName}` : task.progressPhase ? ` · ${task.progressPhase}` : ""}`)];
+				const lines = [header, ...run.tasks.map((task) => `  ${taskLine(task)}`)];
 				const usage = formatUsage(run.aggregateUsage);
 				if (usage) lines.push(theme.fg("dim", usage));
 				return new Text(lines.join("\n"), 0, 0);
