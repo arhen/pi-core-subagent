@@ -19,12 +19,10 @@ import {
 	getMarkdownTheme,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { StringEnum } from "@earendil-works/pi-ai";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { type AgentConfig, type AgentScope, discoverAgents, formatAgentCatalog, resolveAgent } from "./agents.ts";
 import { createChildTools, createWatchdog, type ChildHandlers } from "./child.ts";
 import { createMailbox, type Mailbox } from "./mailbox.ts";
 
@@ -33,7 +31,8 @@ const MAX_CONCURRENCY = 8;
 const MAX_TASKS = 16;
 const DEFAULT_RUNTIME_MS = 10 * 60 * 1000;
 const DEFAULT_STALL_MS = 90_000;
-const DEFAULT_READONLY_TOOLS = ["read", "grep", "find", "ls"];
+const READONLY_TOOLS = ["read", "grep", "find", "ls"];
+const WRITE_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write"];
 const FINAL_OUTPUT_CAP = 24 * 1024;
 const WIDGET_THROTTLE_MS = 150;
 
@@ -54,11 +53,17 @@ interface UsageStats {
 
 interface TaskInput {
 	id?: string;
+	/** Name the leader invents for this subagent (display + mailbox addressing). */
 	agent: string;
+	desc?: string;
 	task: string;
+	/** System prompt the leader writes for this agent. Optional — a minimal default is used. */
+	prompt?: string;
+	/** true = write toolset; false/omitted = read-only toolset. */
+	write?: boolean;
+	tools?: string[];
 	model?: string;
 	thinking?: string;
-	tools?: string[];
 	maxRuntimeMs?: number;
 }
 
@@ -101,7 +106,6 @@ interface RunSnapshot {
 
 interface RunDetails {
 	run: RunSnapshot;
-	agents: Array<{ name: string; description: string; source: string }>;
 	background?: boolean;
 }
 
@@ -234,24 +238,8 @@ function parseModelRef(ref: string | undefined): { provider: string; modelId: st
 	return { provider: ref.slice(0, index), modelId: ref.slice(index + 1) };
 }
 
-// Cached catalog for the context hook: per-request injection, no fs scan.
-let catalogCache: { cwd: string; at: number; text: string } | undefined;
-
-function makeAgentCatalogContext(cwd: string): string {
-	const now = Date.now();
-	if (catalogCache && catalogCache.cwd === cwd && now - catalogCache.at < 15_000) return catalogCache.text;
-	const { agents } = discoverAgents(cwd, "user");
-	const text = [
-		"Available subagents for the `subagent` tool:",
-		formatAgentCatalog(agents),
-		"",
-		"Rules: use only exact `name` values from this list. Modes: single (agent+task), parallel (tasks), chain (chain with {previous}).",
-		"background:true fire-and-forgets a run; interact via subagent_status / subagent_result / await_subagent / reply_subagent / subagent_cancel.",
-		"allowIntercom:true lets children ask you questions (ask_parent), notify you, and message sibling subagents.",
-	].join("\n");
-	catalogCache = { cwd, at: now, text };
-	return text;
-}
+// Cached catalog removed: agents are defined inline by the leader per call,
+// so there is nothing to inject into the parent context. Zero per-request cost.
 
 async function mapWithConcurrency<T>(items: T[], concurrency: number, fn: (item: T, index: number) => Promise<void>): Promise<void> {
 	let next = 0;
@@ -439,25 +427,18 @@ class SubagentManager {
 		run: RunSnapshot,
 		task: TaskSnapshot,
 		input: TaskInput,
-		agents: AgentConfig[],
 		ctx: ExtensionContext,
 		signal: AbortSignal | undefined,
 		onUpdate?: (partial: any) => void,
 	): Promise<void> {
 		if (TERMINAL.includes(task.status)) return; // canceled while queued
 
-		const agent = resolveAgent(agents, task.agent);
-		if (!agent) {
-			this.updateTask(run, task, { status: "failed", error: `Unknown agent: ${task.agent}.`, endedAt: Date.now() }, ctx, onUpdate);
-			return;
-		}
 		this.updateTask(run, task, {
 			status: "starting",
-			agent: agent.name,
 			startedAt: Date.now(),
-			model: input.model ?? agent.model,
-			thinking: input.thinking ?? agent.thinking,
-			tools: input.tools ?? agent.tools ?? DEFAULT_READONLY_TOOLS,
+			model: input.model,
+			thinking: input.thinking,
+			tools: input.tools ?? (input.write ? WRITE_TOOLS : READONLY_TOOLS),
 		}, ctx, onUpdate);
 
 		let child: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
@@ -471,7 +452,7 @@ class SubagentManager {
 
 		const key = `${run.id}:${task.id}`;
 		try {
-			const modelRef = parseModelRef(input.model ?? agent.model);
+			const modelRef = parseModelRef(input.model);
 			const model = modelRef ? ctx.modelRegistry.find(modelRef.provider, modelRef.modelId) : undefined;
 			if (modelRef && !model) throw new Error(`Model not found: ${modelRef.provider}/${modelRef.modelId}`);
 
@@ -483,7 +464,7 @@ class SubagentManager {
 				cwd: task.cwd,
 				agentDir: getAgentDir(),
 				noExtensions: true,
-				appendSystemPromptOverride: (base) => [...base, [agent.systemPrompt.trim(), subagentInstruction].filter(Boolean).join("\n\n")],
+				appendSystemPromptOverride: (base) => [...base, [input.prompt?.trim(), subagentInstruction].filter(Boolean).join("\n\n")],
 			});
 			await loader.reload();
 
@@ -495,12 +476,12 @@ class SubagentManager {
 				resourceLoader: loader,
 				sessionManager: SessionManager.create(task.cwd, undefined, { parentSession: getParentSessionFile(ctx) }),
 				model,
-				thinkingLevel: (input.thinking ?? agent.thinking) as ThinkingLevel | undefined,
-				tools: input.tools ?? agent.tools ?? DEFAULT_READONLY_TOOLS,
+				thinkingLevel: (input.thinking ?? undefined) as ThinkingLevel | undefined,
+				tools: input.tools ?? (input.write ? WRITE_TOOLS : READONLY_TOOLS),
 				customTools,
 			});
 			child = created.session;
-			child.setSessionName?.(`subagent: ${agent.name}`);
+			child.setSessionName?.(`subagent: ${task.agent}`);
 			this.updateTask(run, task, { status: "running", sessionId: child.sessionId, sessionFile: child.sessionFile }, ctx, onUpdate);
 
 			const childFailurePromise = new Promise<never>((_, reject) => {
@@ -589,10 +570,7 @@ class SubagentManager {
 	}
 
 	// ── run lifecycle ───────────────────────────────────────────────────
-	createRun(params: SubagentParamsShape, ctx: ExtensionContext): { run: RunSnapshot; inputs: TaskInput[]; agents: AgentConfig[] } {
-		const discovery = discoverAgents(ctx.cwd, params.agentScope ?? "user");
-		const agents = discovery.agents;
-
+	createRun(params: SubagentParamsShape, ctx: ExtensionContext): { run: RunSnapshot; inputs: TaskInput[] } {
 		const hasChain = (params.chain?.length ?? 0) > 0;
 		const hasTasks = (params.tasks?.length ?? 0) > 0;
 		const hasSingle = Boolean(params.agent && params.task);
@@ -602,7 +580,7 @@ class SubagentManager {
 
 		const mode: RunMode = hasChain ? "chain" : hasTasks ? "parallel" : "single";
 		const inputs: TaskInput[] = hasSingle
-			? [{ agent: params.agent as string, task: params.task as string, model: params.model, thinking: params.thinking, tools: params.tools, maxRuntimeMs: params.maxRuntimeMs }]
+			? [{ agent: params.agent as string, desc: params.desc, task: params.task as string, prompt: params.prompt, write: params.write, model: params.model, thinking: params.thinking, tools: params.tools, maxRuntimeMs: params.maxRuntimeMs }]
 			: hasTasks
 				? params.tasks!
 				: params.chain!;
@@ -625,7 +603,7 @@ class SubagentManager {
 				status: "queued" as TaskStatus,
 				model: input.model,
 				thinking: input.thinking,
-				tools: input.tools,
+				tools: input.tools ?? (input.write ? WRITE_TOOLS : READONLY_TOOLS),
 				usage: emptyUsage(),
 			})),
 			aggregateUsage: emptyUsage(),
@@ -635,10 +613,10 @@ class SubagentManager {
 		this.settlers.set(run.id, () => {});
 		for (const task of run.tasks) this.mailboxes.open(task.id);
 		this.emit("subagent:run-created", { run: cloneRun(run) });
-		return { run, inputs, agents };
+		return { run, inputs };
 	}
 
-	private async executeTasks(run: RunSnapshot, inputs: TaskInput[], agents: AgentConfig[], ctx: ExtensionContext, signal: AbortSignal | undefined, onUpdate?: (partial: any) => void): Promise<void> {
+	private async executeTasks(run: RunSnapshot, inputs: TaskInput[], ctx: ExtensionContext, signal: AbortSignal | undefined, onUpdate?: (partial: any) => void): Promise<void> {
 		run.status = "running";
 		run.startedAt = Date.now();
 		this.updateRun(run, ctx, onUpdate);
@@ -650,14 +628,14 @@ class SubagentManager {
 				if (TERMINAL.includes(task.status)) continue; // canceled
 				const input = { ...inputs[i]!, task: inputs[i]!.task.replace(/\{previous\}/g, previous) };
 				task.task = input.task;
-				await this.runChild(run, task, input, agents, ctx, signal, onUpdate);
+				await this.runChild(run, task, input, ctx, signal, onUpdate);
 				if (task.status !== "completed") break;
 				previous = task.finalText ?? "";
 			}
 		} else {
 			await mapWithConcurrency(run.tasks, run.mode === "single" ? 1 : run.concurrency, async (task) => {
 				const index = run.tasks.indexOf(task);
-				await this.runChild(run, task, inputs[index]!, agents, ctx, signal, onUpdate);
+				await this.runChild(run, task, inputs[index]!, ctx, signal, onUpdate);
 			});
 		}
 
@@ -673,17 +651,17 @@ class SubagentManager {
 	}
 
 	async runBlocking(params: SubagentParamsShape, signal: AbortSignal | undefined, onUpdate: ((partial: any) => void) | undefined, ctx: ExtensionContext): Promise<RunDetails> {
-		const { run, inputs, agents } = this.createRun(params, ctx);
-		await this.executeTasks(run, inputs, agents, ctx, signal, onUpdate);
-		return { run: cloneRun(run), agents: agents.map((a) => ({ name: a.name, description: a.description, source: a.source })) };
+		const { run, inputs } = this.createRun(params, ctx);
+		await this.executeTasks(run, inputs, ctx, signal, onUpdate);
+		return { run: cloneRun(run) };
 	}
 
 	startInBackground(params: SubagentParamsShape, ctx: ExtensionContext): RunDetails {
-		const { run, inputs, agents } = this.createRun(params, ctx);
-		void this.executeTasks(run, inputs, agents, ctx, undefined, undefined).then(() => {
+		const { run, inputs } = this.createRun(params, ctx);
+		void this.executeTasks(run, inputs, ctx, undefined, undefined).then(() => {
 			this.notifyParent(run, run.status === "completed" ? "completed" : run.status === "aborted" ? "aborted" : "failed");
 		});
-		return { run: cloneRun(run), agents: agents.map((a) => ({ name: a.name, description: a.description, source: a.source })), background: true };
+		return { run: cloneRun(run), background: true };
 	}
 
 	cancelRun(runId: string): { aborted: number } {
@@ -737,20 +715,25 @@ let eventSeq = 0;
 
 const TaskItem = Type.Object({
 	id: Type.Optional(Type.String({ description: "Optional stable task id" })),
-	agent: Type.String({ description: "Exact agent name from the injected subagents list" }),
+	agent: Type.String({ description: "Name you invent for this subagent" }),
+	desc: Type.Optional(Type.String({ description: "One-line description of this agent's role" })),
 	task: Type.String({ description: "Task for this agent" }),
+	prompt: Type.Optional(Type.String({ description: "System prompt defining this agent's behavior. Optional — a minimal default is used." })),
+	write: Type.Optional(Type.Boolean({ description: "true = write toolset (read, bash, edit, write); default false = read-only (read, grep, find, ls)" })),
 	model: Type.Optional(Type.String({ description: "Model override (provider/model-id)" })),
 	thinking: Type.Optional(Type.String({ description: "Thinking level override" })),
-	tools: Type.Optional(Type.Array(Type.String(), { description: "Tool allowlist" })),
+	tools: Type.Optional(Type.Array(Type.String(), { description: "Explicit tool allowlist (overrides the toolset)" })),
 	maxRuntimeMs: Type.Optional(Type.Number({ description: "Per-task timeout (ms)" })),
 });
 
 type SubagentParamsShape = {
 	agent?: string;
+	desc?: string;
 	task?: string;
+	prompt?: string;
+	write?: boolean;
 	tasks?: TaskInput[];
 	chain?: TaskInput[];
-	agentScope?: AgentScope;
 	model?: string;
 	thinking?: string;
 	tools?: string[];
@@ -761,14 +744,15 @@ type SubagentParamsShape = {
 };
 
 const SubagentParams = Type.Object({
-	agent: Type.Optional(Type.String({ description: "Agent name for single mode" })),
-	task: Type.Optional(Type.String({ description: "Task for single mode" })),
+	agent: Type.Optional(Type.String({ description: "Name you invent for this subagent (single mode)" })),
+	desc: Type.Optional(Type.String({ description: "One-line description (single mode)" })),
+	task: Type.Optional(Type.String({ description: "Task (single mode)" })),
+	prompt: Type.Optional(Type.String({ description: "System prompt for this agent (single mode)" })),
+	write: Type.Optional(Type.Boolean({ description: "true = write toolset; default false = read-only (single mode)" })),
 	tasks: Type.Optional(Type.Array(TaskItem, { description: "Parallel tasks" })),
 	chain: Type.Optional(Type.Array(TaskItem, { description: "Sequential tasks; {previous} = prior output" })),
-	agentScope: Type.Optional(StringEnum(["user", "project", "both"] as const, { default: "user", description: "Where to load agents from" })),
-	model: Type.Optional(Type.String({ description: "Model override for single mode" })),
-	thinking: Type.Optional(Type.String({ description: "Thinking override for single mode" })),
-	tools: Type.Optional(Type.Array(Type.String(), { description: "Tool allowlist for single mode (default: read-only)" })),
+	model: Type.Optional(Type.String({ description: "Model override (single mode)" })),
+	thinking: Type.Optional(Type.String({ description: "Thinking override (single mode)" })),
 	concurrency: Type.Optional(Type.Number({ description: `Parallel concurrency (default ${DEFAULT_CONCURRENCY}, max ${MAX_CONCURRENCY})` })),
 	maxRuntimeMs: Type.Optional(Type.Number({ description: `Per-task timeout, ms (default ${DEFAULT_RUNTIME_MS / 60000} min)` })),
 	background: Type.Optional(Type.Boolean({ description: "Fire-and-forget: return immediately with a runId; you'll be notified on completion" })),
@@ -822,19 +806,16 @@ export default function (pi: ExtensionAPI) {
 		}
 		manager.clearRuns();
 	});
-	pi.on("context", (event, ctx) => {
-		return { messages: [...event.messages, { role: "user", content: [{ type: "text", text: makeAgentCatalogContext(ctx.cwd) }] } as AgentMessage] };
-	});
 
 	pi.registerTool<typeof SubagentParams, RunDetails>({
 		name: "subagent",
 		label: "Subagent",
-		description: "Delegate work to isolated subagents (own context, own session). Modes: single, parallel (tasks), chain ({previous}). background:true fire-and-forgets with completion notice. allowIntercom:true lets children ask you questions and message each other.",
-		promptSnippet: "Delegate analysis/review/test/planning work to specialized subagents.",
+		description: "Define and run isolated subagents (own context, own session). You invent the agent: give it a name, an optional system prompt, and a toolset (read-only by default, write:true for edit access). Modes: single, parallel (tasks), chain ({previous}). background:true fire-and-forgets with completion notice. allowIntercom:true lets children ask you questions and message each other.",
+		promptSnippet: "Define and delegate work to specialized subagents.",
 		promptGuidelines: [
 			"Use subagent when independent review, testing, research, or parallel analysis improves quality.",
-			"Use only exact agent names from the injected available subagents list.",
-			"Prefer read-only subagent tools unless the user explicitly asks for implementation work.",
+			"Define each subagent yourself: an invented name, a focused system prompt (prompt:), and a toolset — read-only (default) or write (write:true).",
+			"Prefer read-only subagents unless the task explicitly needs edits.",
 			"Use background:true for long-running work; you'll be notified on completion.",
 			"Use allowIntercom:true only when a child may need to ask you something; keep children autonomous otherwise.",
 		],
@@ -842,22 +823,6 @@ export default function (pi: ExtensionAPI) {
 		executionMode: "sequential",
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const typed = params as unknown as SubagentParamsShape;
-			if ((typed.agentScope === "project" || typed.agentScope === "both") && ctx.hasUI) {
-				const discovery = discoverAgents(ctx.cwd, typed.agentScope);
-				const requested = new Set<string>();
-				if (typed.agent) requested.add(typed.agent);
-				for (const t of typed.tasks ?? []) requested.add(t.agent);
-				for (const t of typed.chain ?? []) requested.add(t.agent);
-				const projectAgents = discovery.agents.filter((a) => a.source === "project" && [...requested].some((name) => a.name === name || a.name.toLowerCase() === name.toLowerCase()));
-				if (projectAgents.length > 0) {
-					const ok = await ctx.ui.confirm(
-						"Run project-local subagents?",
-						`Agents: ${projectAgents.map((a) => a.name).join(", ")}\nSource: ${discovery.projectAgentsDir}\n\nProject agents are repo-controlled. Continue only for trusted repositories.`,
-					);
-					if (!ok) throw new Error("Canceled: project-local subagents not approved.");
-				}
-			}
-
 			if (typed.background) {
 				const details = manager.startInBackground(typed, ctx);
 				return {

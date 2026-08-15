@@ -1,9 +1,8 @@
 /**
- * Smoke tests: agent discovery/catalog + mailbox routing + failure classification.
+ * Smoke tests: failure classification + mailbox routing + watchdog.
  * Pure logic only — no pi runtime needed. Run: bun test
  */
 import { describe, expect, test } from "bun:test";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { classifyFailure } from "../src/index.ts";
 import { createWatchdog } from "../src/child.ts";
 import { createMailbox } from "../src/mailbox.ts";
@@ -54,11 +53,5 @@ describe("watchdog", () => {
 		wd.dispose();
 		wd.dispose();
 		expect(wd).toBeTruthy();
-	});
-});
-
-describe("agents", () => {
-	test("agent dir exists (pi runtime present)", () => {
-		expect(getAgentDir()).toBeTruthy();
 	});
 });

@@ -6,8 +6,10 @@ Built for one job: delegate work to isolated subagents **without bloating the pa
 
 ## Design principles
 
+- **No agent files, no discovery.** The leader defines every subagent inline, per call: name, system prompt, toolset. Nothing is loaded from disk.
+- **Two toolsets only.** Read-only (`read, grep, find, ls` — default) or write (`read, grep, find, ls, bash, edit, write` — `write: true`). No per-agent tool config surface.
 - **In-process** — children are `AgentSession`s in the same runtime. No process spawn, no context bleed.
-- **Small parent footprint** — 6 slim tools, one-line agent catalog injected per request (cached), background completions notify with a 3-line summary (full output only on demand).
+- **Zero parent-context injection.** No catalog, no context hook. 6 slim tools total.
 - **Throttled updates** — widget/stream updates coalesce to ~6/s; no per-event deep clones.
 - **No silent hangs** — watchdog aborts children that produce no events for 90s; per-task timeout 10min.
 
@@ -20,20 +22,52 @@ pi install /path/to/minimalist-subagents
 
 > Conflicts with other extensions that register a `subagent` tool (e.g. `@gotgenes/pi-subagents`, `@narumitw/pi-subagents`). Run one at a time.
 
-## Agents
+## Usage — the leader invents the agents
 
-Markdown files in `~/.pi/agent/agents/*.md` (user) or `.pi/agents/*.md` (project):
-
-```markdown
----
-name: reviewer
-description: Reviews code for correctness and edge cases
-tools: read,grep,find,ls
----
-You are a thorough code reviewer. Be concise and specific.
+```json
+{
+  "agent": "api-reviewer",
+  "desc": "Read-only reviewer focused on the upload endpoint",
+  "prompt": "You are a strict API reviewer. Check auth, rate limiting, and error handling. Cite file:line.",
+  "task": "Review src/api/upload.ts",
+  "write": false
+}
 ```
 
-`tools` defaults to read-only (`read, grep, find, ls`). Optional frontmatter: `model` (`provider/model-id`), `thinking`.
+Parallel — mixed toolsets, siblings can talk via mailbox:
+
+```json
+{
+  "allowIntercom": true,
+  "tasks": [
+    { "agent": "researcher", "prompt": "You find facts. Cite paths.", "task": "Map the auth flow", "write": false },
+    { "agent": "implementer", "prompt": "You make minimal changes.", "task": "Implement POST /api/upload", "write": true }
+  ]
+}
+```
+
+Chain — `{previous}` is replaced with the prior agent's output:
+
+```json
+{
+  "chain": [
+    { "agent": "planner", "prompt": "You write a step list.", "task": "Plan the change", "write": false },
+    { "agent": "doer", "prompt": "You follow the plan exactly.", "task": "Execute: {previous}", "write": true }
+  ]
+}
+```
+
+Background + intercom:
+
+```json
+{
+  "agent": "auditor",
+  "prompt": "You audit dependencies.",
+  "task": "Audit package.json for outdated deps",
+  "background": true,
+  "allowIntercom": true
+}
+```
 
 ## Tools
 
@@ -45,6 +79,10 @@ You are a thorough code reviewer. Be concise and specific.
 | `await_subagent` | block until a run finishes (optional `timeoutMs`) |
 | `reply_subagent` | answer a child's `ask_parent` question |
 | `subagent_cancel` | abort a running/queued run |
+
+### Per-task fields
+
+`agent` (name you invent, required), `task` (required), `prompt` (system prompt, optional — minimal default used), `write` (toolset, default read-only), plus optional `desc`, `model` (`provider/model-id`), `thinking`, `tools` (explicit allowlist, overrides toolset), `maxRuntimeMs`, `id`.
 
 ### Child talk tools (when `allowIntercom: true`)
 
@@ -58,8 +96,7 @@ You are a thorough code reviewer. Be concise and specific.
 
 ## Context budget
 
-- Parent tools: 6 schemas with short descriptions.
-- Catalog: ~50-80 tokens/request, cached (15s TTL + dir-mtime), injected once per request.
+- Parent tools: 6 schemas with short descriptions. **No catalog, no context hook** — nothing injected per request.
 - Background completion: 3-line notice. Full text only via `subagent_result`.
 - Children: isolated sessions; talk tools injected only when `allowIntercom`.
 
@@ -75,4 +112,4 @@ Runtime state: runs persist to `<parent-session>.subagents.json` sidecar; restor
 
 ## License
 
-MIT. Derived from `@ghoulm370/pi-subagent-ui` (MIT) — see LICENSE.
+MIT.
