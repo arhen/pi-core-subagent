@@ -24,6 +24,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { Container, Markdown, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { lookupAgent } from "./agents.ts";
 import { CHILD_TALK_TOOLS, createChildTools, createWatchdog, type ChildHandlers } from "./child.ts";
 import { createMailbox, type Mailbox } from "./mailbox.ts";
 
@@ -525,12 +526,21 @@ class SubagentManager {
 	): Promise<void> {
 		if (TERMINAL.includes(task.status)) return; // canceled while queued
 
+		// Inline params win; otherwise fall back to an existing agent file
+		// (~/.agents, .pi/agents, user dir). Never creates files.
+		const fileAgent = input.prompt?.trim() ? undefined : lookupAgent(task.agent, task.cwd);
+		const prompt = input.prompt?.trim() || fileAgent?.prompt;
+		const modelRef = parseModelRef(input.model ?? fileAgent?.model);
+		const thinking = input.thinking ?? fileAgent?.thinking;
+		const baseTools = input.tools ?? (input.write ? WRITE_TOOLS : fileAgent?.tools ?? READONLY_TOOLS);
+		const tools = [...baseTools, ...(run.allowIntercom ? CHILD_TALK_TOOLS : [])];
+
 		this.updateTask(run, task, {
 			status: "starting",
 			startedAt: Date.now(),
-			model: input.model,
-			thinking: input.thinking,
-			tools: [...(input.tools ?? (input.write ? WRITE_TOOLS : READONLY_TOOLS)), ...(run.allowIntercom ? CHILD_TALK_TOOLS : [])],
+			model: input.model ?? fileAgent?.model,
+			thinking,
+			tools,
 		}, ctx, onUpdate);
 
 		let child: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
@@ -544,7 +554,6 @@ class SubagentManager {
 
 		const key = `${run.id}:${task.id}`;
 		try {
-			const modelRef = parseModelRef(input.model);
 			const model = modelRef ? ctx.modelRegistry.find(modelRef.provider, modelRef.modelId) : undefined;
 			if (modelRef && !model) throw new Error(`Model not found: ${modelRef.provider}/${modelRef.modelId}`);
 
@@ -556,13 +565,11 @@ class SubagentManager {
 				cwd: task.cwd,
 				agentDir: getAgentDir(),
 				noExtensions: true,
-				appendSystemPromptOverride: (base) => [...base, [input.prompt?.trim(), subagentInstruction].filter(Boolean).join("\n\n")],
+				appendSystemPromptOverride: (base) => [...base, [prompt?.trim(), subagentInstruction].filter(Boolean).join("\n\n")],
 			});
 			await loader.reload();
 
 			const customTools: ToolDefinition[] = run.allowIntercom ? createChildTools(task.id, this.makeChildHandlers(run, task, ctx)) : [];
-			// pi filters custom tools through the `tools` allowlist — talk tools must be listed.
-			const childTools = [...(input.tools ?? (input.write ? WRITE_TOOLS : READONLY_TOOLS)), ...(run.allowIntercom ? CHILD_TALK_TOOLS : [])];
 
 			const created = await createAgentSession({
 				cwd: task.cwd,
@@ -570,8 +577,8 @@ class SubagentManager {
 				resourceLoader: loader,
 				sessionManager: SessionManager.create(task.cwd, undefined, { parentSession: getParentSessionFile(ctx) }),
 				model,
-				thinkingLevel: (input.thinking ?? undefined) as ThinkingLevel | undefined,
-				tools: childTools,
+				thinkingLevel: thinking as ThinkingLevel | undefined,
+				tools,
 				customTools,
 			});
 			child = created.session;
@@ -639,13 +646,19 @@ class SubagentManager {
 			if (pendingFailure) throw failureError(pendingFailure);
 
 			const finalText = task.finalText || truncateText((child.messages as AssistantMessage[]).map(getFirstText).filter(Boolean).at(-1) || "");
-			this.updateTask(run, task, { status: "completed", finalText, endedAt: Date.now() }, ctx, onUpdate);
+			if (task.status !== "aborted") {
+				this.updateTask(run, task, { status: "completed", finalText, endedAt: Date.now() }, ctx, onUpdate);
+			}
 		} catch (err) {
 			if (timeout) clearTimeout(timeout);
-			const aborted = signal?.aborted;
+			// Cancel is authoritative: parent tool signal OR run/task already marked aborted.
+			const aborted = signal?.aborted || run.status === "aborted" || task.status === "aborted";
 			const subagentStatus = (err as Error & { subagentStatus?: string })?.subagentStatus;
 			try {
-				await child?.abort();
+				// Unblock a child stuck in ask_parent, then time-box the abort so a
+				// wedged session can never hang this catch/finally.
+				this.pendingReplies.get(key)?.resolve("(parent unreachable)");
+				await Promise.race([child?.abort(), new Promise((r) => setTimeout(r, 5000))]);
 			} catch {
 				/* ignore */
 			}
@@ -730,7 +743,7 @@ class SubagentManager {
 				const task = run.tasks[i]!;
 				if (TERMINAL.includes(task.status)) continue; // canceled
 				const rawTask = inputs[i]!.task;
-				let next = rawTask.replace(/\{previous\}/g, previous);
+				let next = rawTask.replace(/\{previous\}/g, () => previous); // replacer fn: no $ corruption
 				if (previous === "" && rawTask.includes("{previous}")) {
 					next += "\n\n(Note: {previous} was empty — no prior step output existed yet.)";
 				}
@@ -753,7 +766,7 @@ class SubagentManager {
 		run.endedAt = Date.now();
 		this.flushWidget(ctx, onUpdate);
 		this.emit("subagent:run-completed", { runId: run.id, status: run.status, run: cloneRun(run), aggregateUsage: run.aggregateUsage });
-		this.settlers.get(run.id)?.(cloneRun(run));
+		this.settleRun(run.id, run);
 		for (const task of run.tasks) this.mailboxes.close(task.id);
 		this.persist(ctx);
 	}
@@ -790,9 +803,18 @@ class SubagentManager {
 		}
 		run.status = "aborted";
 		run.endedAt = Date.now();
-		this.settlers.get(runId)?.(cloneRun(run));
+		this.settleRun(runId, run);
+		for (const task of run.tasks) this.mailboxes.close(task.id);
 		this.emit("subagent:run-completed", { runId: run.id, status: "aborted", run: cloneRun(run) });
 		return { aborted };
+	}
+
+	/** Settle-and-delete: awaiters resolve once; no leak, no closure chain. */
+	private settleRun(runId: string, run: RunSnapshot): void {
+		const s = this.settlers.get(runId);
+		if (!s) return;
+		this.settlers.delete(runId);
+		s(cloneRun(run));
 	}
 
 	awaitRun(runId: string, timeoutMs?: number): Promise<RunSnapshot | undefined> {
@@ -806,6 +828,8 @@ class SubagentManager {
 				prev?.(r);
 				resolve(r);
 			});
+			// Settle may have run between the terminal check and wiring.
+			if (TERMINAL.includes(run.status)) resolve(cloneRun(run));
 		});
 		if (!timeoutMs) return settled;
 		return Promise.race([
@@ -823,12 +847,12 @@ let eventSeq = 0;
 
 const TaskItem = Type.Object({
 	id: Type.Optional(Type.String({ description: "Optional stable task id" })),
-	agent: Type.String({ description: "Name you invent for this subagent" }),
+	agent: Type.String({ description: "Agent name. Invent it (inline prompt below), or reuse a name from .agents/, .pi/agents/, or ~/.pi/agent/agents/ to inherit its prompt and toolset. Never creates files." }),
 	task: Type.String({ description: "Task for this agent" }),
 	prompt: Type.Optional(Type.String({ description: "System prompt defining this agent's behavior. Optional — a minimal default is used." })),
 	write: Type.Optional(Type.Boolean({ description: "true = write toolset (read, bash, edit, write); default false = read-only (read, grep, find, ls)" })),
 	model: Type.Optional(Type.String({ description: "Model override (provider/model-id)" })),
-	thinking: Type.Optional(Type.String({ description: "Thinking level override" })),
+	thinking: Type.Optional(Type.String({ description: "Thinking level: off|minimal|low|medium|high|xhigh|max" })),
 	tools: Type.Optional(Type.Array(Type.String(), { description: "Explicit tool allowlist (overrides the toolset)" })),
 	maxRuntimeMs: Type.Optional(Type.Number({ description: "Per-task timeout (ms)" })),
 });
@@ -857,7 +881,7 @@ const SubagentParams = Type.Object({
 	tasks: Type.Optional(Type.Array(TaskItem, { description: "Parallel tasks" })),
 	chain: Type.Optional(Type.Array(TaskItem, { description: "Sequential tasks; {previous} = prior output" })),
 	model: Type.Optional(Type.String({ description: "Model override (single mode)" })),
-	thinking: Type.Optional(Type.String({ description: "Thinking override (single mode)" })),
+	thinking: Type.Optional(Type.String({ description: "Thinking level: off|minimal|low|medium|high|xhigh|max (single mode)" })),
 	concurrency: Type.Optional(Type.Number({ description: `Parallel concurrency (default ${DEFAULT_CONCURRENCY}, max ${MAX_CONCURRENCY})` })),
 	maxRuntimeMs: Type.Optional(Type.Number({ description: `Per-task timeout, ms (default ${DEFAULT_RUNTIME_MS / 60000} min)` })),
 	background: Type.Optional(Type.Boolean({ description: "Fire-and-forget: return immediately with a runId; you'll be notified on completion" })),

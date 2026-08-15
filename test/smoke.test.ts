@@ -6,6 +6,48 @@ import { describe, expect, test } from "bun:test";
 import { classifyFailure } from "../src/index.ts";
 import { createWatchdog } from "../src/child.ts";
 import { createMailbox } from "../src/mailbox.ts";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { lookupAgent } from "../src/agents.ts";
+
+describe("lookupAgent", () => {
+	test("finds project .agents file and parses frontmatter", () => {
+		const cwd = mkdtempSync(join(tmpdir(), "sa-test-"));
+		try {
+			mkdirSync(join(cwd, ".agents"), { recursive: true });
+			writeFileSync(
+				join(cwd, ".agents", "critic.md"),
+				"---\nname: critic\ndescription: harsh reviewer\ntools: read,grep\nthinking: high\n---\nYou are harsh.\n",
+			);
+			const a = lookupAgent("critic", cwd);
+			expect(a?.prompt).toBe("You are harsh.");
+			expect(a?.tools).toEqual(["read", "grep"]);
+			expect(a?.thinking).toBe("high");
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+	test("returns undefined for unknown agent / missing dirs", () => {
+		const cwd = mkdtempSync(join(tmpdir(), "sa-test-"));
+		try {
+			expect(lookupAgent("nope", cwd)).toBeUndefined();
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+	test("name must match frontmatter", () => {
+		const cwd = mkdtempSync(join(tmpdir(), "sa-test-"));
+		try {
+			mkdirSync(join(cwd, ".agents"), { recursive: true });
+			writeFileSync(join(cwd, ".agents", "x.md"), "---\nname: other\n---\nbody\n");
+			expect(lookupAgent("x", cwd)).toBeUndefined();
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+});
+
 
 describe("classifyFailure", () => {
 	test("stop/end/undefined → no failure (normal completion)", () => {
