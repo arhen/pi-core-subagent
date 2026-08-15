@@ -212,21 +212,19 @@ function fmtDuration(ms: number | undefined): string {
 	const s = Math.max(0, Math.round(ms / 1000));
 	return s >= 60 ? `${Math.floor(s / 60)}m${s % 60}s` : `${s}s`;
 }
-function taskDuration(task: TaskSnapshot): string {
+function taskTimer(task: TaskSnapshot): string {
 	if (task.startedAt === undefined) return "–";
 	const end = task.endedAt ?? Date.now();
-	return fmtDuration(end - task.startedAt);
-}
-function taskStats(task: TaskSnapshot): string {
-	return `${task.toolCalls ?? 0} tools · ${taskDuration(task)}`;
+	const running = !TERMINAL.includes(task.status);
+	return `${running ? "running " : ""}${fmtDuration(end - task.startedAt)}`;
 }
 function taskStatsWithUsage(task: TaskSnapshot): string {
-	const stats = `${task.toolCalls ?? 0} tools · ${taskDuration(task)}`;
+	const stats = `${task.toolCalls ?? 0} tools`;
 	const usage = formatUsage(task.usage);
 	return `${stats}${usage ? ` · ${usage}` : ""}`;
 }
 function taskLine(task: TaskSnapshot): string {
-	return `${statusIcon(task.status)} ${task.agent} · ${taskStatsWithUsage(task)}`;
+	return `${statusIcon(task.status)} ${task.agent} · ${taskStatsWithUsage(task)} · ${taskTimer(task)}`;
 }
 function argsSuffix(args: unknown): string {
 	try {
@@ -283,7 +281,7 @@ class SubagentsWidget implements Component {
 				!TERMINAL.includes(task.status) && task.lastActivity
 					? `${this.theme.fg("dim", `→ ${task.lastActivity}`)} · `
 					: "";
-			const line = `${statusIcon(task.status)} ${task.agent} · ${activity}${taskStatsWithUsage(task)}`;
+			const line = `${statusIcon(task.status)} ${task.agent} · ${activity}${taskStatsWithUsage(task)} · ${taskTimer(task)}`;
 			lines.push(truncateToWidth(`${conn} ${line}`, width, "…"));
 		});
 		if (run.tasks.length > 8) lines.push(`${this.theme.fg("dim", "└─")} ${this.theme.fg("dim", `+${run.tasks.length - 8} more`)}`);
