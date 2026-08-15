@@ -913,8 +913,8 @@ let eventSeq = 0;
 
 const TaskItem = Type.Object({
 	id: Type.Optional(Type.String({ description: "Optional stable task id" })),
-	agent: Type.String({ description: "Agent name. Invent it (inline prompt below), or reuse a name from .agents/, .pi/agents/, or ~/.pi/agent/agents/ to inherit its prompt and toolset. Never creates files." }),
-	task: Type.String({ description: "Task for this agent" }),
+	agent: Type.String({ minLength: 1, description: "Agent name. Invent it (inline prompt below), or reuse a name from .agents/, .pi/agents/, or ~/.pi/agent/agents/ to inherit its prompt and toolset. Never creates files." }),
+	task: Type.String({ minLength: 1, description: "Task for this agent" }),
 	prompt: Type.Optional(Type.String({ description: "System prompt defining this agent's behavior. Optional — a minimal default is used." })),
 	write: Type.Optional(Type.Boolean({ description: "true = write toolset (read, bash, edit, write); default false = read-only (read, grep, find, ls)" })),
 	model: Type.Optional(Type.String({ description: "Model override (provider/model-id)" })),
@@ -941,8 +941,8 @@ type SubagentParamsShape = {
 };
 
 const SubagentParams = Type.Object({
-	agent: Type.Optional(Type.String({ description: "Name you invent for this subagent (single mode)" })),
-	task: Type.Optional(Type.String({ description: "Task (single mode)" })),
+	agent: Type.Optional(Type.String({ minLength: 1, description: "Name you invent for this subagent (single mode)" })),
+	task: Type.Optional(Type.String({ minLength: 1, description: "Task (single mode)" })),
 	prompt: Type.Optional(Type.String({ description: "System prompt for this agent (single mode)" })),
 	write: Type.Optional(Type.Boolean({ description: "true = write toolset; default false = read-only (single mode)" })),
 	tasks: Type.Optional(Type.Array(TaskItem, { description: "Parallel tasks" })),
@@ -1007,7 +1007,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool<typeof SubagentParams, RunDetails>({
 		name: "subagent",
 		label: "Subagent",
-		description: "Define and run isolated subagents (own context, own session). You invent the agent: give it a name, an optional system prompt, and a toolset (read-only by default, write:true for edit access). Modes: single, parallel (tasks), chain ({previous}). background:true fire-and-forgets with completion notice. allowIntercom:true lets children ask you questions and message each other.",
+		description: "Define and run isolated subagents (own context, own session). You invent the agent: name, optional system prompt, toolset (read-only default, write:true for edits). Modes: single, parallel (tasks), chain ({previous}). background:true fire-and-forgets with completion notice. allowIntercom:true lets children ask you questions and message each other.\n\nExamples (copy these shapes):\nSingle: subagent({ agent: \"reviewer\", prompt: \"You review code for correctness\", task: \"Review src/auth.ts\" })\nParallel: subagent({ tasks: [{ agent: \"mapper\", task: \"Map all API routes\" }, { agent: \"critic\", task: \"Review auth for vulnerabilities\" }] })\nChain: subagent({ chain: [{ agent: \"planner\", task: \"Plan the change\" }, { agent: \"doer\", write: true, task: \"Execute: {previous}\" }] })\nBackground: subagent({ agent: \"auditor\", task: \"Audit deps\", background: true })",
 		promptSnippet: "Define and delegate work to specialized subagents.",
 		promptGuidelines: [
 			"Use subagent when independent review, testing, research, or parallel analysis improves quality.",
