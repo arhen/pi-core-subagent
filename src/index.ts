@@ -237,9 +237,16 @@ function activitySnippet(text: string): string {
 	const flat = text.replace(/\s+/g, " ").trim();
 	return flat.length > 90 ? `${flat.slice(0, 90)}…` : flat;
 }
+/** Mailbox addressing map: task_1=hunter · task_2=verifier. Same string children see. */
+function rosterLine(run: RunSnapshot): string | undefined {
+	if (!run.allowIntercom || run.tasks.length < 2) return undefined;
+	return `roster: ${run.tasks.map((t) => `${t.id}=${t.agent}`).join(" · ")}`;
+}
 /** Static compact lines (tool-result stream, subagent_status, /subagents). */
 function compactLines(run: RunSnapshot): string[] {
 	const lines: string[] = [];
+	const roster = rosterLine(run);
+	if (roster) lines.push(roster);
 	for (const task of run.tasks.slice(0, MAX_TASKS)) {
 		lines.push(taskLine(task));
 	}
@@ -271,6 +278,8 @@ class SubagentsWidget implements Component {
 		const active = !TERMINAL.includes(run.status);
 		const head = active ? "accent" : "dim";
 		const lines = [truncateToWidth(`${this.theme.fg(head, active ? "●" : "○")} ${this.theme.fg(head, `Subagents (${done}/${run.tasks.length})`)}`, width, "…")];
+		const roster = rosterLine(run);
+		if (roster) lines.push(truncateToWidth(`${this.theme.fg("dim", `  ${roster}`)}`, width, "…"));
 		const visible = run.tasks.slice(0, MAX_TASKS);
 		visible.forEach((task, i) => {
 			const last = i === visible.length - 1 && run.tasks.length <= MAX_TASKS;
@@ -294,6 +303,8 @@ function makeSummary(run: RunSnapshot): string {
 	const lines = [`Run ${run.id}: Subagents ${run.mode}${run.background ? " (background)" : ""} finished: ${succeeded}/${run.tasks.length} succeeded${failed ? `, ${failed} failed` : ""}${aborted ? `, ${aborted} aborted` : ""}.`];
 	const usage = formatUsage(run.aggregateUsage);
 	if (usage) lines.push(`Usage: ${usage}`);
+	const roster = rosterLine(run);
+	if (roster) lines.push(roster);
 	for (const task of run.tasks) {
 		lines.push(`\n## ${task.agent} ${statusIcon(task.status)}${task.error ? `\nError: ${task.error}` : `\n${truncateText(task.finalText || "(no output)")}`}`);
 	}
