@@ -188,11 +188,14 @@ function updateUsageFromMessage(task: TaskSnapshot, message: AssistantMessage): 
 	task.usage.cost += usage.cost?.total ?? 0;
 	if (message.model && !task.model) task.model = message.model;
 }
+function fmtTokens(n: number): string {
+	return n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k` : String(n);
+}
 function formatUsage(usage: UsageStats): string {
 	const parts: string[] = [];
 	if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
-	if (usage.input) parts.push(`in ${usage.input}`);
-	if (usage.output) parts.push(`out ${usage.output}`);
+	if (usage.input) parts.push(`in ${fmtTokens(usage.input)}`);
+	if (usage.output) parts.push(`out ${fmtTokens(usage.output)}`);
 	if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
 	return parts.join(" · ");
 }
