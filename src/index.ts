@@ -915,6 +915,7 @@ type SubagentParamsShape = {
 	maxRuntimeMs?: number;
 	background?: boolean;
 	allowIntercom?: boolean;
+	notifyPerTask?: boolean;
 };
 
 const SubagentParams = Type.Object({
@@ -929,6 +930,7 @@ const SubagentParams = Type.Object({
 	concurrency: Type.Optional(Type.Number({ description: `Parallel concurrency (default ${DEFAULT_CONCURRENCY}, max ${MAX_CONCURRENCY})` })),
 	maxRuntimeMs: Type.Optional(Type.Number({ description: `Per-task timeout, ms (default ${DEFAULT_RUNTIME_MS / 60000} min)` })),
 	background: Type.Optional(Type.Boolean({ description: "Fire-and-forget: return immediately with a runId; you'll be notified on completion" })),
+	notifyPerTask: Type.Optional(Type.Boolean({ description: "Wake you (queued follow-up turn) as each task completes, even mid-run. Default false." })),
 	allowIntercom: Type.Optional(Type.Boolean({ description: "Let children ask you questions, notify you, and message sibling subagents" })),
 });
 
