@@ -1117,7 +1117,7 @@ export default function (pi: ExtensionAPI) {
 			"Use allowIntercom:true only when a child may need to ask you something; keep children autonomous otherwise.",
 		],
 		parameters: SubagentParams,
-		executionMode: "sequential",
+		executionMode: "parallel", // sibling subagent calls run concurrently, not serialized
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const typed = params as unknown as SubagentParamsShape;
 			if (typed.background) {
@@ -1140,7 +1140,6 @@ export default function (pi: ExtensionAPI) {
 			if (args.model) parts.push(args.model);
 			if (args.thinking) parts.push(args.thinking);
 			if (args.write) parts.push("write");
-			else if (writeCount === 0) parts.push("read-only");
 			if (writeCount > 0) parts.push(`${writeCount} write`);
 			if (args.concurrency) parts.push(`c${args.concurrency}`);
 			if (args.maxRuntimeMs) parts.push(`${Math.round(args.maxRuntimeMs / 60000)}m`);
