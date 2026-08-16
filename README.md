@@ -5,6 +5,15 @@
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![pi extension](https://img.shields.io/badge/pi-extension-7c3aed)](https://github.com/earendil-works/pi)
 
+## Install
+
+Requires the [pi coding agent](https://github.com/earendil-works/pi) — install it first: `npm install -g @earendil-works/pi-coding-agent`.
+
+```sh
+pi install npm:@arhen/pi-core-subagent
+# or locally: pi install /path/to/pi-subagents
+```
+
 Minimalist pi extension: **fast in-process subagents** with single / parallel / graph modes, background runs, cancellation, intercom (child↔leader) and an agent↔agent mailbox.
 
 Built for one job: delegate work to isolated subagents **without bloating the parent context**.
@@ -71,13 +80,6 @@ flowchart TB
 ```
 
 The dotted arrows are the whole point: a child may burn 200k tokens reading files, and the leader receives only its final answer.
-
-## Install
-
-```sh
-pi install npm:@arhen/pi-core-subagent
-# or locally: pi install /path/to/pi-subagents
-```
 
 ## Usage — the leader invents the agents
 
