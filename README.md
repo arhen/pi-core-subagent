@@ -8,6 +8,10 @@ Minimalist pi extension: **fast in-process subagents** with single / parallel / 
 
 Built for one job: delegate work to isolated subagents **without bloating the parent context**.
 
+![Subagents widget](docs/subagents-widget.png)
+
+*The `subagent` tool call plus the live above-editor widget: per-agent activity, tool counts, turns, token counters and timers.*
+
 ## Design principles
 
 - **No agent files, no discovery.** The leader defines every subagent inline per call — name, system prompt, toolset. Nothing is read from or written to disk.
@@ -15,7 +19,8 @@ Built for one job: delegate work to isolated subagents **without bloating the pa
 - **In-process** — children are `AgentSession`s in the same runtime. No process spawn, no context bleed.
 - **Zero parent-context injection.** No catalog, no context hook. 6 slim tools total.
 - **Throttled updates** — widget/stream updates coalesce to ~6/s; no per-event deep clones.
-- **No silent hangs** — watchdog aborts children that produce no events for 3 minutes; per-task timeout 10min.
+- **No silent hangs** — watchdog aborts children that produce no events for 3 minutes.
+- **No default runtime cap** — tasks run until done, stalled (watchdog), or aborted by the user. `maxRuntimeMs` is opt-in (default 0 = unlimited).
 
 ## Install
 
@@ -94,6 +99,15 @@ Background + intercom:
 | `notify_parent` | one-way message to the leader |
 | `send_agent_message` | message to a sibling subagent's mailbox (`to` = its task id, or `"leader"`) |
 | `poll_agent_messages` | drain this subagent's mailbox |
+
+## Peek — `/peek` or `ctrl+shift+s`
+
+Read-only pane over the session's subagents:
+
+- `↑`/`↓` — move between agents
+- `enter` — live tail of that child's session file (`esc` goes back)
+- `x` then `y` — abort ONE subagent (only mutation; `n`/any other key cancels)
+- `esc` — close
 
 ## Context budget
 

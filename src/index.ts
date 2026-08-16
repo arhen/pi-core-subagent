@@ -26,7 +26,8 @@ import { createPeekPane, type PeekTask } from "./peek.ts";
 const DEFAULT_CONCURRENCY = 3;
 const MAX_CONCURRENCY = 8;
 const MAX_TASKS = 16;
-const DEFAULT_RUNTIME_MS = 10 * 60 * 1000;
+/** No default wall-clock cap: a subagent runs until its task is done, it stalls, or the user aborts. */
+const DEFAULT_RUNTIME_MS = 0;
 const DEFAULT_STALL_MS = 180_000; // 3 min: long model thinking streams emit message_update, not message_end
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const READONLY_TOOLS = ["read", "grep", "find", "ls"];
@@ -225,6 +226,21 @@ function taskStatsWithUsage(task: TaskSnapshot): string {
 function taskLine(task: TaskSnapshot): string {
 	return `${statusIcon(task.status)} ${task.agent} · ${taskStatsWithUsage(task)} · ${taskTimer(task)}`;
 }
+/** Numbers get the theme's number color, same as the footer's token counters. */
+function colorNums(text: string, theme: Theme): string {
+	return text.replace(/\d+(?:\.\d+)?/g, (n) => theme.fg("syntaxNumber", n));
+}
+/**
+ * Themed one-liner. Finished tasks dim entirely (stats included); live tasks
+ * keep the agent name readable with themed numbers.
+ */
+function themedTaskLine(task: TaskSnapshot, theme: Theme, activity = ""): string {
+	const tail = `${taskStatsWithUsage(task)} · ${taskTimer(task)}`;
+	if (TERMINAL.includes(task.status)) {
+		return theme.fg("dim", `${statusIcon(task.status)} ${task.agent} · ${tail}`);
+	}
+	return `${statusIcon(task.status)} ${task.agent} · ${activity}${colorNums(theme.fg("muted", tail), theme)}`;
+}
 function argsSuffix(args: unknown): string {
 	try {
 		const s = JSON.stringify(args);
@@ -280,19 +296,12 @@ class SubagentsWidget implements Component {
 		const budget = WIDGET_MAX_LINES - 1;
 		let shown = 0;
 		outer: for (const run of runs) {
-			const allDone = TERMINAL.includes(run.status);
 			for (const task of run.tasks) {
 				if (shown >= budget) break outer;
 				shown += 1;
-				const activity =
-					!TERMINAL.includes(task.status) && task.lastActivity
-						? `${this.theme.fg("dim", `→ ${task.lastActivity}`)} · `
-						: "";
-				// Tasks of a finished run: dim everything except the agent name.
-				const line = allDone
-					? `${this.theme.fg("dim", `${statusIcon(task.status)} `)}${task.agent} ${this.theme.fg("dim", `· ${taskStatsWithUsage(task)} · ${taskTimer(task)}`)}`
-					: `${statusIcon(task.status)} ${task.agent} · ${activity}${taskStatsWithUsage(task)} · ${taskTimer(task)}`;
-				lines.push(truncateToWidth(`${this.theme.fg("dim", "├─")} ${line}`, width, "…"));
+				const activity = task.lastActivity ? `${this.theme.fg("dim", `→ ${task.lastActivity}`)} · ` : "";
+				// Per-TASK status drives dimming: a finished agent stays dim even while siblings run.
+				lines.push(truncateToWidth(`${this.theme.fg("dim", "├─")} ${themedTaskLine(task, this.theme, activity)}`, width, "…"));
 			}
 		}
 		const hidden = total - shown;
@@ -576,7 +585,6 @@ class SubagentManager {
 				this.ensureWidget(ctx);
 				this.widgetTui?.requestRender();
 			}
-			onUpdate?.({ content: [{ type: "text", text: compactLines(run).join("\n") }] });
 		}, WIDGET_THROTTLE_MS));
 	}
 	private flushWidget(run: RunSnapshot | undefined, ctx?: ExtensionContext, onUpdate?: (partial: any) => void): void {
@@ -592,7 +600,8 @@ class SubagentManager {
 			this.ensureWidget(ctx);
 			this.widgetTui?.requestRender();
 		}
-		onUpdate?.({ content: [{ type: "text", text: compactLines(run).join("\n") }] });
+		// Transcript gets one status line only — the live per-task view is the widget's job.
+		onUpdate?.({ content: [{ type: "text", text: `${run.tasks.filter((t) => TERMINAL.includes(t.status)).length}/${run.tasks.length} done · ${run.status}` }] });
 	}
 	private ensureWidget(ctx: ExtensionContext): void {
 		if (this.widgetTui !== null || !ctx.hasUI) return;
@@ -832,10 +841,15 @@ class SubagentManager {
 
 			const maxRuntimeMs = input.maxRuntimeMs ?? DEFAULT_RUNTIME_MS;
 			const promptPromise = child.prompt(task.task, { source: "extension" });
-			const timeoutPromise = new Promise<never>((_, reject) => {
-				timeout = setTimeout(() => reject(new Error(`Subagent timed out after ${maxRuntimeMs}ms`)), maxRuntimeMs);
-			});
-			await Promise.race([promptPromise, childFailurePromise, childEndPromise, watchdog.promise, timeoutPromise]);
+			const races: Promise<unknown>[] = [promptPromise, childFailurePromise, childEndPromise, watchdog.promise];
+			if (maxRuntimeMs > 0) {
+				races.push(
+					new Promise<never>((_, reject) => {
+						timeout = setTimeout(() => reject(new Error(`Subagent timed out after ${maxRuntimeMs}ms`)), maxRuntimeMs);
+					}),
+				);
+			}
+			await Promise.race(races);
 			if (timeout) clearTimeout(timeout);
 
 			pendingFailure ??= lastAssistantFailure(child.messages as AssistantMessage[]);
@@ -1149,7 +1163,7 @@ const SubagentParams = Type.Object({
 	thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Thinking level override (single mode)" })),
 	cwd: Type.Optional(Type.String({ description: "Working directory (single mode). Default: current project." })),
 	concurrency: Type.Optional(Type.Number({ description: `Parallel concurrency (default ${DEFAULT_CONCURRENCY}, max ${MAX_CONCURRENCY})` })),
-	maxRuntimeMs: Type.Optional(Type.Number({ description: `Per-task timeout, ms (default ${DEFAULT_RUNTIME_MS / 60000} min)` })),
+	maxRuntimeMs: Type.Optional(Type.Number({ description: "Per-task timeout, ms. Omit for no cap (default): tasks run until done, stalled, or user-aborted." })),
 	background: Type.Optional(Type.Boolean({ description: "Fire-and-forget: return immediately with a runId; you'll be notified on completion" })),
 	notifyPerTask: Type.Optional(Type.Boolean({ description: "Wake you (queued follow-up turn) as each task completes, even mid-run. Default false." })),
 	allowIntercom: Type.Optional(Type.Boolean({ description: "Let children ask you questions, notify you, and message sibling subagents" })),
@@ -1294,7 +1308,7 @@ export default function (pi: ExtensionAPI) {
 			// ponytail: mode/count already shown on the call line above; result header only adds progress + status.
 			const header = `${statusIcon(run.status)} ${theme.fg("accent", `${run.tasks.filter((t) => t.status === "completed").length}/${run.tasks.length} done`)}${run.background ? ` ${theme.fg("muted", "(background)")}` : ""} ${theme.fg("muted", run.status)}`;
 			if (!expanded) {
-				const lines = [header, ...run.tasks.map((task) => `  ${taskLine(task)}`)];
+				const lines = [header, ...run.tasks.map((task) => `  ${themedTaskLine(task, theme)}`)];
 				const usage = formatUsage(run.aggregateUsage);
 				if (usage) lines.push(theme.fg("dim", usage));
 				return new Text(lines.join("\n"), 0, 0);
