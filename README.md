@@ -15,7 +15,7 @@ Built for one job: delegate work to isolated subagents **without bloating the pa
 - **In-process** — children are `AgentSession`s in the same runtime. No process spawn, no context bleed.
 - **Zero parent-context injection.** No catalog, no context hook. 6 slim tools total.
 - **Throttled updates** — widget/stream updates coalesce to ~6/s; no per-event deep clones.
-- **No silent hangs** — watchdog aborts children that produce no events for 90s; per-task timeout 10min.
+- **No silent hangs** — watchdog aborts children that produce no events for 3 minutes; per-task timeout 10min.
 
 ## Install
 

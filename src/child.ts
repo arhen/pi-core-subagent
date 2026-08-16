@@ -98,8 +98,8 @@ export function createChildTools(taskId: string, handlers: ChildHandlers): ToolD
 				if (messages.length === 0) return { content: [{ type: "text" as const, text: "No messages." }], details: {} };
 				const body = messages
 					.map((m) => `from ${m.from}: ${m.text}`)
-					.join("\n")
-					.slice(0, 4000);
+					.join("\n");
+				const capped = body.length > 4000 ? body.slice(0, 4000).replace(/[\uD800-\uDBFF]$/, "") : body; // multibyte-safe
 				return { content: [{ type: "text" as const, text: body }], details: { messages } };
 			},
 		},

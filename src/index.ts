@@ -307,7 +307,8 @@ function makeSummary(run: RunSnapshot): string {
 	const succeeded = run.tasks.filter((t) => t.status === "completed").length;
 	const failed = run.tasks.filter((t) => t.status === "failed").length;
 	const aborted = run.tasks.filter((t) => t.status === "aborted").length;
-	const lines = [`Run ${run.id}: Subagents ${run.mode}${run.background ? " (background)" : ""} finished: ${succeeded}/${run.tasks.length} succeeded${failed ? `, ${failed} failed` : ""}${aborted ? `, ${aborted} aborted` : ""}.`];
+	const done = TERMINAL.includes(run.status) ? "finished" : "running";
+	const lines = [`Run ${run.id}: Subagents ${run.mode}${run.background ? " (background)" : ""} ${done}: ${succeeded}/${run.tasks.length} succeeded${failed ? `, ${failed} failed` : ""}${aborted ? `, ${aborted} aborted` : ""}.`];
 	const usage = formatUsage(run.aggregateUsage);
 	if (usage) lines.push(`Usage: ${usage}`);
 	for (const task of run.tasks) {
@@ -495,7 +496,9 @@ class SubagentManager {
 			const parentFile = getParentSessionFile(ctx);
 			if (!parentFile) return;
 			const sidecar = parentFile.replace(/\.jsonl$/, ".subagents.json");
-			import("fs").then(({ writeFileSync }) => writeFileSync(sidecar, JSON.stringify(this.listRuns().slice(0, 50).map(cloneRun), null, 2)));
+			import("fs")
+				.then(({ writeFileSync }) => writeFileSync(sidecar, JSON.stringify(this.listRuns().slice(0, 50).map(cloneRun), null, 2)))
+				.catch(() => {}); // never surface as an unhandled rejection
 		} catch {
 			/* ignore */
 		}
@@ -533,8 +536,7 @@ class SubagentManager {
 	}
 
 	// Widget: register-once + requestRender (todo-overlay pattern).
-	// The component self-animates the spinner via its own 100ms interval;
-	// scheduleWidget just throttles status changes into requestRender calls.
+	// scheduleWidget throttles status changes into requestRender calls.
 	private widgetTui: TUI | null = null;
 	/** Upsert a run into the widget's visible set (all runs, not just the latest). */
 	private upsertWidgetRun(run: RunSnapshot | undefined): void {
@@ -600,7 +602,6 @@ class SubagentManager {
 			onAskParent: async (_taskId, question) => {
 				this.updateTask(run, task, { status: "awaiting_parent" }, ctx);
 				this.liveChildren.get(`${run.id}:${task.id}`)?.touchWatchdog();
-				this.notifyParent(run, "asked", { taskId: task.id, question });
 				// A blocking run's parent can't reply mid-tool (followUp only fires after the
 				// tool returns) — only background runs can truly wait for the answer.
 				if (!run.background) {
@@ -608,10 +609,17 @@ class SubagentManager {
 					this.liveChildren.get(`${run.id}:${task.id}`)?.touchWatchdog();
 					return "Parent cannot answer while this run is blocking. Continue autonomously with your best judgment.";
 				}
-				const reply = await this.awaitParentReply(run.id, task.id);
-				this.updateTask(run, task, { status: "running" }, ctx);
-				this.liveChildren.get(`${run.id}:${task.id}`)?.touchWatchdog();
-				return reply;
+				this.notifyParent(run, "asked", { taskId: task.id, question });
+				// M3: a waiting child is not stalled — keep the watchdog fed until the reply.
+				const keepAlive = setInterval(() => this.liveChildren.get(`${run.id}:${task.id}`)?.touchWatchdog(), 30_000);
+				try {
+					const reply = await this.awaitParentReply(run.id, task.id);
+					this.updateTask(run, task, { status: "running" }, ctx);
+					this.liveChildren.get(`${run.id}:${task.id}`)?.touchWatchdog();
+					return reply;
+				} finally {
+					clearInterval(keepAlive);
+				}
 			},
 			onNotifyParent: (_taskId, message, level) => {
 				this.emit("subagent:intercom", { runId: run.id, taskId: task.id, kind: "notify", level, message });
@@ -793,7 +801,7 @@ class SubagentManager {
 				runController?.signal.removeEventListener("abort", abortChild);
 			};
 			// Cancel may have landed during session creation — honor it before prompting.
-			if (run.status === "aborted" || TERMINAL.includes(task.status)) {
+			if (run.status === "aborted" || TERMINAL.includes(task.status) || signal?.aborted) {
 				await child.abort();
 				throw new Error("Canceled by subagent_cancel");
 			}
@@ -928,7 +936,7 @@ class SubagentManager {
 				if (run.notifyPerTask && run.background && TERMINAL.includes(task.status)) {
 					this.notifyTask(run, task, task.status as "completed" | "failed" | "aborted");
 				}
-				if (task.status !== "completed") break;
+				if (task.status !== "completed") break; // aborted/failed link stops the chain
 				previous = task.finalText ?? "";
 			}
 		} else {
@@ -953,8 +961,11 @@ class SubagentManager {
 		} else {
 			this.clearWidget(ctx);
 		}
-		this.emit("subagent:run-completed", { runId: run.id, status: run.status, run: cloneRun(run), aggregateUsage: run.aggregateUsage });
-		this.settleRun(run.id, run);
+		// L7: cancelRun already emitted + settled — don't double-report.
+		if (this.settlers.has(run.id)) {
+			this.emit("subagent:run-completed", { runId: run.id, status: run.status, run: cloneRun(run), aggregateUsage: run.aggregateUsage });
+			this.settleRun(run.id, run);
+		}
 		this.runControllers.delete(run.id);
 		for (const task of run.tasks) this.mailboxes.close(`${run.id}:${task.id}`);
 		this.persist(ctx);
@@ -1138,7 +1149,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("agent_start", (_event, ctx) => {
-		if (!manager.turnActivity) manager.clearWidget(ctx);
+		if (!manager.turnActivity && !manager.hasActiveRun()) manager.clearWidget(ctx);
 		manager.turnActivity = false;
 	});
 
