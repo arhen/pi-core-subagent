@@ -1238,7 +1238,8 @@ export default function (pi: ExtensionAPI) {
 		);
 	};
 	pi.registerCommand("peek", { description: "Peek at running subagents (↑↓ move, enter tails)", handler: (_args, ctx) => openPeek(ctx) });
-	pi.registerShortcut("ctrl+shift+s", { description: "Peek at running subagents", handler: openPeek });
+	// ctrl+shift+s belongs to pi-web-access (search curator); 'a' for agents is free.
+	pi.registerShortcut("ctrl+shift+a", { description: "Peek at running subagents", handler: openPeek });
 
 	pi.on("agent_start", (_event, ctx) => {
 		if (!manager.turnActivity && !manager.hasActiveRun()) manager.clearWidget(ctx);
