@@ -540,20 +540,20 @@ class SubagentManager {
 				this.ensureWidget(ctx);
 				this.widgetTui?.requestRender();
 			}
-			onUpdate?.({ content: [{ type: "text", text: targets.flatMap(compactLines).join("\n") }] });
+			onUpdate?.({ content: [{ type: "text", text: compactLines(run ?? targets[0]!).join("\n") }] });
 		}, WIDGET_THROTTLE_MS);
 	}
-	private flushWidget(ctx?: ExtensionContext, onUpdate?: (partial: any) => void): void {
+	private flushWidget(run: RunSnapshot | undefined, ctx?: ExtensionContext, onUpdate?: (partial: any) => void): void {
 		if (this.widgetTimer) {
 			clearTimeout(this.widgetTimer);
 			this.widgetTimer = undefined;
 		}
-		if (this.widgetRuns.length === 0) return;
+		if (!run || this.widgetRuns.length === 0) return;
 		if (ctx?.hasUI) {
 			this.ensureWidget(ctx);
 			this.widgetTui?.requestRender();
 		}
-		onUpdate?.({ content: [{ type: "text", text: this.widgetRuns.flatMap(compactLines).join("\n") }] });
+		onUpdate?.({ content: [{ type: "text", text: compactLines(run).join("\n") }] });
 	}
 	private ensureWidget(ctx: ExtensionContext): void {
 		if (this.widgetTui !== null || !ctx.hasUI) return;
@@ -899,7 +899,7 @@ class SubagentManager {
 		const aborted = run.tasks.some((t) => t.status === "aborted") || Boolean(signal?.aborted);
 		run.status = aborted ? "aborted" : failed ? "failed" : "completed";
 		run.endedAt = Date.now();
-		this.flushWidget(ctx, onUpdate);
+		this.flushWidget(run, ctx, onUpdate);
 		// Run done: keep the widget only while another run is still live.
 		const live = this.listRuns().find((r) => !TERMINAL.includes(r.status));
 		if (live) {
@@ -1113,7 +1113,7 @@ export default function (pi: ExtensionAPI) {
 		promptSnippet: "Define and delegate work to specialized subagents.",
 		promptGuidelines: [
 			"Use subagent when independent review, testing, research, or parallel analysis improves quality.",
-			"Decompose parallelizable work: if the request has 2+ independent sub-tasks (separate files, separate concerns, independent research/review), delegate each to its own subagent in one parallel call instead of handling them inline.",
+			"Decompose parallelizable work: if the request has 2+ independent sub-tasks (separate files, separate concerns, independent research/review), delegate each to its own subagent — in ONE call with tasks[] (single shot), not multiple parallel subagent calls.",
 			"If independent sub-tasks are sequential (each builds on the previous one's output), use chain mode with {previous}.",
 			"Define each subagent yourself: an invented name, a focused system prompt (prompt:), and a toolset — read-only (default) or write (write:true).",
 			"Prefer read-only subagents unless the task explicitly needs edits.",
