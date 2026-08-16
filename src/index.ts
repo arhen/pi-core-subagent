@@ -389,7 +389,15 @@ class SubagentManager {
 
 	constructor(private readonly pi: ExtensionAPI) {}
 
-	/** Hide the widget. Call on agent_start when the turn made no subagent calls. */
+	/** Any run still has queued/running tasks? */
+	hasActiveRun(): boolean {
+		for (const run of this.runs.values()) {
+			if (run.tasks.some((t) => !TERMINAL.includes(t.status))) return true;
+		}
+		return false;
+	}
+
+	/** Hide the widget. */
 	clearWidget(ctx: ExtensionContext): void {
 		this.widgetRun = undefined;
 		this.widgetTui = null;
@@ -875,7 +883,13 @@ class SubagentManager {
 		run.status = aborted ? "aborted" : failed ? "failed" : "completed";
 		run.endedAt = Date.now();
 		this.flushWidget(ctx, onUpdate);
-		this.clearWidget(ctx); // run is done — drop the widget immediately
+		// Run done: keep the widget only while another run is still live.
+		const live = this.listRuns().find((r) => !TERMINAL.includes(r.status));
+		if (live) {
+			this.scheduleWidget(live, ctx, onUpdate);
+		} else {
+			this.clearWidget(ctx);
+		}
 		this.emit("subagent:run-completed", { runId: run.id, status: run.status, run: cloneRun(run), aggregateUsage: run.aggregateUsage });
 		this.settleRun(run.id, run);
 		this.runControllers.delete(run.id);
