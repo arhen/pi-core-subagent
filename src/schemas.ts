@@ -55,12 +55,17 @@ export const SubagentParams = Type.Object({
 		}),
 	),
 	background: Type.Optional(
-		Type.Boolean({ description: "Fire-and-forget: return immediately with a runId; you'll be notified on completion" }),
+		Type.Boolean({
+			description:
+				"Fire-and-forget: return immediately with a runId; you'll be notified on completion. Default true — set false when you need the result inline in this turn.",
+			default: true,
+		}),
 	),
 	notifyPerTask: Type.Optional(
 		Type.Boolean({
 			description:
-				"Wake you (queued follow-up turn) as each task completes — background runs only, since blocking runs can't be woken mid-tool. Default false.",
+				"Wake you (queued follow-up turn) as each task completes — background runs only, since blocking runs can't be woken mid-tool. Default true.",
+			default: true,
 		}),
 	),
 	allowIntercom: Type.Optional(

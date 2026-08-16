@@ -798,9 +798,9 @@ export class SubagentManager {
 			id: newId("run"),
 			mode,
 			status: "queued",
-			background: Boolean(params.background),
+			background: params.background ?? true,
 			allowIntercom: Boolean(params.allowIntercom),
-			notifyPerTask: params.notifyPerTask ?? false,
+			notifyPerTask: params.notifyPerTask ?? true,
 			createdAt: Date.now(),
 			concurrency: Math.max(1, Math.min(params.concurrency ?? DEFAULT_CONCURRENCY, MAX_CONCURRENCY)),
 			tasks: inputs.map((input, index) => ({

@@ -221,14 +221,13 @@ flowchart LR
 
 And the rule that keeps this from becoming ceremony: **zero `needs` anywhere = plain parallel.** No waves, no gates, no graph vocabulary imposed on flat work.
 
-Background + intercom:
+Background (default) + intercom — the run returns a runId immediately; you stay steerable while it works:
 
 ```json
 {
   "agent": "auditor",
   "prompt": "You audit dependencies.",
   "task": "Audit package.json for outdated deps",
-  "background": true,
   "allowIntercom": true
 }
 ```
@@ -237,7 +236,7 @@ Background + intercom:
 
 | Tool | Purpose |
 |---|---|
-| `subagent` | single / `tasks` (parallel or graph via `needs`) / `chain` (`{previous}`); `background:true` fire-and-forget; `allowIntercom:true` enables child talk tools; `notifyPerTask: true` wakes you as each task completes (background runs only; default off) |
+| `subagent` | single / `tasks` (parallel or graph via `needs`) / `chain` (`{previous}`); background is the default (`background:false` for inline result in this turn); `allowIntercom:true` enables child talk tools; `notifyPerTask` (default true) wakes you as each task completes (background runs only) |
 | `subagent_status` | live per-task snapshot (non-blocking), including each child's session file path |
 | `subagent_result` | full output of a run or one task |
 | `await_subagent` | block until a run finishes (optional `timeoutMs`) |
