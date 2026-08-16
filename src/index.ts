@@ -25,7 +25,7 @@ const DEFAULT_CONCURRENCY = 3;
 const MAX_CONCURRENCY = 8;
 const MAX_TASKS = 16;
 const DEFAULT_RUNTIME_MS = 10 * 60 * 1000;
-const DEFAULT_STALL_MS = 90_000;
+const DEFAULT_STALL_MS = 180_000; // 3 min: long model thinking streams emit message_update, not message_end
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const READONLY_TOOLS = ["read", "grep", "find", "ls"];
 const WRITE_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write"];
@@ -705,7 +705,7 @@ class SubagentManager {
 			});
 
 			unsubscribe = child.subscribe((event: AgentSessionEvent) => {
-				const active = event.type === "message_end" || event.type === "tool_execution_start" || event.type === "tool_execution_end" || event.type === "agent_settled";
+				const active = event.type === "message_update" || event.type === "message_end" || event.type === "tool_execution_start" || event.type === "tool_execution_end" || event.type === "agent_settled";
 				if (active) {
 					watchdog.touch();
 					this.emit("subagent:session-event", { runId: run.id, taskId: task.id, seq: eventSeq++, event: { type: event.type } });
