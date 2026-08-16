@@ -875,6 +875,7 @@ class SubagentManager {
 		run.status = aborted ? "aborted" : failed ? "failed" : "completed";
 		run.endedAt = Date.now();
 		this.flushWidget(ctx, onUpdate);
+		this.clearWidget(ctx); // run is done — drop the widget immediately
 		this.emit("subagent:run-completed", { runId: run.id, status: run.status, run: cloneRun(run), aggregateUsage: run.aggregateUsage });
 		this.settleRun(run.id, run);
 		this.runControllers.delete(run.id);
