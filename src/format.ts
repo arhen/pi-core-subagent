@@ -90,7 +90,10 @@ export function themedTaskLine(task: TaskSnapshot, theme: Theme, activity = ""):
 	if (TERMINAL.includes(task.status)) {
 		return theme.fg("dim", `${statusIcon(task.status)} ${task.agent} · ${tail}`);
 	}
-	return `${statusIcon(task.status)} ${task.agent} · ${gate}${activity}${colorNums(tail, theme)}`;
+	// Talking (mailbox/intercom tool in flight): pulse the name accent↔dim; normal otherwise.
+	pulsePhase += 1;
+	const name = isTalking(task) ? theme.fg(pulsePhase % 2 === 0 ? "accent" : "dim", `${task.agent}⇄`) : task.agent;
+	return `${statusIcon(task.status)} ${name} · ${gate}${activity}${colorNums(tail, theme)}`;
 }
 /**
  * Human-readable activity line: "Read src/index.ts", "Grep wrapSingleLine".
@@ -127,6 +130,14 @@ export function activitySnippet(text: string): string {
 	const flat = text.replace(/\s+/g, " ").trim();
 	return flat.length > 90 ? `${flat.slice(0, 90)}…` : flat;
 }
+
+/** Mailbox/intercom tools — while one is the task's last activity, the agent is "talking". */
+export const TALK_TOOLS = ["poll_agent_messages", "send_agent_message", "ask_parent", "notify_parent"];
+export function isTalking(task: TaskSnapshot): boolean {
+	const a = task.lastActivity?.toLowerCase() ?? "";
+	return TALK_TOOLS.some((t) => a.startsWith(t));
+}
+let pulsePhase = 0; // flips per render; talking agents alternate between the two name styles
 /** Static compact lines (tool-result stream, subagent_status, /subagents). */
 export function compactLines(run: RunSnapshot): string[] {
 	const lines: string[] = [];

@@ -21,6 +21,7 @@ import {
 	activitySnippet,
 	describeCall,
 	getFirstText,
+	isTalking,
 	makeNotice,
 	makeTaskNotice,
 	SubagentsWidget,
@@ -288,6 +289,10 @@ export class SubagentManager {
 		this.runControllers.clear();
 		this.mailboxes = createMailbox();
 		this.widgetTui = null; // force re-registration on the next session
+		if (this.pulseTimer) {
+			clearTimeout(this.pulseTimer);
+			this.pulseTimer = null;
+		}
 		for (const t of this.widgetTimers.values()) clearTimeout(t);
 		this.widgetTimers.clear();
 		this.widgetRuns = [];
@@ -406,8 +411,22 @@ export class SubagentManager {
 					this.ensureWidget(ctx);
 					this.widgetTui?.requestRender();
 				}
+				this.maybePulse(ctx);
 			}, WIDGET_THROTTLE_MS),
 		);
+	}
+
+	/** While any live task's last activity is a talk tool, keep re-rendering so its name pulses. */
+	private pulseTimer: ReturnType<typeof setTimeout> | null = null;
+	private maybePulse(ctx?: ExtensionContext): void {
+		if (this.pulseTimer || !this.widgetTui) return;
+		const talking = this.widgetRuns.some((r) => r.tasks.some(isTalking));
+		if (!talking) return; // last tick stops the loop: talking→normal resumes instantly
+		this.pulseTimer = setTimeout(() => {
+			this.pulseTimer = null;
+			this.widgetTui?.requestRender();
+			this.maybePulse(ctx);
+		}, 700);
 	}
 	private flushWidget(run: RunSnapshot | undefined, ctx?: ExtensionContext, onUpdate?: (partial: any) => void): void {
 		if (run) {
@@ -422,6 +441,7 @@ export class SubagentManager {
 			this.ensureWidget(ctx);
 			this.widgetTui?.requestRender();
 		}
+		this.maybePulse(ctx);
 		// Transcript gets one status line only — the live per-task view is the widget's job.
 		onUpdate?.({
 			content: [
