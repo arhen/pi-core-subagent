@@ -125,15 +125,16 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool<typeof SubagentParams, RunDetails>({
 		name: "subagent",
 		label: "Subagent",
-		// ponytail: this string is billed on every request. One example — the graph one —
-		// covers ids, needs, write and Verify; the simpler shapes are subsets of it.
+		// ponytail: this string is billed on every request. No example block — an example
+		// biases the model toward one shape; guidelines + JSON schema describe all of them.
 		description:
-			'Run isolated subagents (own context, own session). You invent each agent: name, optional system prompt, toolset (read-only default, write:true to edit). Use `agent`+`task` for one, `tasks` for many. `needs` declares dependency edges: a task waits for its needs and receives their outputs prepended to its prompt. background is the default (returns a runId immediately; toggle via `/subagents auto-bg off`); set background:false when you need the result inline in this turn. allowIntercom:true lets children talk to you and each other.\n\nsubagent({ tasks: [{ id: "api", agent: "api-mapper", task: "Map API routes" }, { id: "db", agent: "db-mapper", task: "Map DB schema" }, { id: "doc", agent: "writer", needs: ["api", "db"], write: true, task: "Write ARCHITECTURE.md. Verify: test -s ARCHITECTURE.md" }] })',
+			'Run isolated subagents (own context, own session). You invent each agent: name, optional system prompt, toolset (read-only default, write:true to edit). Use `agent`+`task` for one, `tasks` for many. `needs` declares dependency edges: a task waits for its needs and receives their outputs prepended to its prompt. background is the default (returns a runId immediately; toggle via `/subagents auto-bg off`); set background:false when you need the result inline in this turn. allowIntercom:true lets children talk to you and each other.',
 		promptSnippet: "Define and delegate work to specialized subagents.",
 		promptGuidelines: [
 			"Use subagent when independent review, testing, research, or parallel analysis improves quality.",
 			"Put every sub-task in ONE call: subagent({ tasks: [...] }). Never make multiple parallel subagent calls — one call, one run, N tasks.",
 			"Order comes from `needs`, not from separate calls: give tasks an `id`, list the ids each depends on. Tasks with no unmet needs run in parallel; dependents receive their upstream outputs automatically — do not restate them.",
+			"Prefer flat `tasks` (plain parallel) unless a real dependency exists — only add `needs` edges when ordering genuinely matters.",
 			"End each task with a runnable check, e.g. 'Verify: npx tsc --noEmit && bun test'. A subagent's claim of success is not evidence.",
 			"Define each agent yourself: invented name, focused system prompt, and read-only (default) or write:true. Prefer read-only.",
 			"Prefer blocking (background:false) whenever the run's result is something you must wait for before your next step — do not default to background for work you depend on inline. When a background run is active, settle its pending results and task dependencies (await_subagent / subagent_result, then continue dependent work) before starting unrelated work.",
