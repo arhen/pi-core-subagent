@@ -76,14 +76,22 @@ export default function (pi: ExtensionAPI) {
 		);
 	};
 	pi.registerCommand("subagents", {
-		description: "List subagent runs. `/subagents peek` opens the browsable pane.",
+		description: "List subagent runs. `/subagents peek` opens the browsable pane; `/subagents auto-bg on|off` toggles background-by-default.",
 		handler: async (args, ctx) => {
-			if (
-				String(args ?? "")
-					.trim()
-					.toLowerCase() === "peek"
-			)
-				return openPeek(ctx);
+			const arg = String(args ?? "")
+				.trim()
+				.toLowerCase();
+			if (arg === "peek") return openPeek(ctx);
+			if (arg === "auto-bg" || arg.startsWith("auto-bg ")) {
+				const value = arg.split(/\s+/)[1];
+				if (value === "on" || value === "off") {
+					const next = manager.setAutoBg(value === "on");
+					ctx.ui.notify(`auto-bg ${next ? "on" : "off"} — subagent calls default to ${next ? "background" : "blocking (inline result)"}.`, "info");
+				} else {
+					ctx.ui.notify(`auto-bg is ${manager.autoBgOn ? "on" : "off"} — use \`/subagents auto-bg on|off\` to change it.`, "info");
+				}
+				return;
+			}
 			const runs = manager.listRuns().slice(0, 10);
 			if (runs.length === 0) {
 				ctx.ui.notify("No subagent runs in this session.", "info");
@@ -120,7 +128,7 @@ export default function (pi: ExtensionAPI) {
 		// ponytail: this string is billed on every request. One example — the graph one —
 		// covers ids, needs, write and Verify; the simpler shapes are subsets of it.
 		description:
-			'Run isolated subagents (own context, own session). You invent each agent: name, optional system prompt, toolset (read-only default, write:true to edit). Use `agent`+`task` for one, `tasks` for many. `needs` declares dependency edges: a task waits for its needs and receives their outputs prepended to its prompt. background is the default (returns a runId immediately); set background:false when you need the result inline in this turn. allowIntercom:true lets children talk to you and each other.\n\nsubagent({ tasks: [{ id: "api", agent: "api-mapper", task: "Map API routes" }, { id: "db", agent: "db-mapper", task: "Map DB schema" }, { id: "doc", agent: "writer", needs: ["api", "db"], write: true, task: "Write ARCHITECTURE.md. Verify: test -s ARCHITECTURE.md" }] })',
+			'Run isolated subagents (own context, own session). You invent each agent: name, optional system prompt, toolset (read-only default, write:true to edit). Use `agent`+`task` for one, `tasks` for many. `needs` declares dependency edges: a task waits for its needs and receives their outputs prepended to its prompt. background is the default (returns a runId immediately; toggle via `/subagents auto-bg off`); set background:false when you need the result inline in this turn. allowIntercom:true lets children talk to you and each other.\n\nsubagent({ tasks: [{ id: "api", agent: "api-mapper", task: "Map API routes" }, { id: "db", agent: "db-mapper", task: "Map DB schema" }, { id: "doc", agent: "writer", needs: ["api", "db"], write: true, task: "Write ARCHITECTURE.md. Verify: test -s ARCHITECTURE.md" }] })',
 		promptSnippet: "Define and delegate work to specialized subagents.",
 		promptGuidelines: [
 			"Use subagent when independent review, testing, research, or parallel analysis improves quality.",
@@ -128,13 +136,14 @@ export default function (pi: ExtensionAPI) {
 			"Order comes from `needs`, not from separate calls: give tasks an `id`, list the ids each depends on. Tasks with no unmet needs run in parallel; dependents receive their upstream outputs automatically — do not restate them.",
 			"End each task with a runnable check, e.g. 'Verify: npx tsc --noEmit && bun test'. A subagent's claim of success is not evidence.",
 			"Define each agent yourself: invented name, focused system prompt, and read-only (default) or write:true. Prefer read-only.",
-			"Use background:true for long work; allowIntercom:true only when a child may need to ask you something.",
+			"Prefer blocking (background:false) whenever the run's result is something you must wait for before your next step — do not default to background for work you depend on inline. When a background run is active, settle its pending results and task dependencies (await_subagent / subagent_result, then continue dependent work) before starting unrelated work.",
+			"allowIntercom:true only when a child may need to ask you something.",
 		],
 		parameters: SubagentParams,
 		executionMode: "parallel", // sibling subagent calls run concurrently, not serialized
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const typed = params as SubagentParamsShape;
-			if (typed.background) {
+			if ((typed.background ?? manager.autoBgOn) && typed.background !== false) {
 				const details = manager.startInBackground(typed, ctx);
 				return {
 					content: [

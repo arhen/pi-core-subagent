@@ -256,6 +256,11 @@ Background (default) + intercom — the run returns a runId immediately; you sta
 | `send_agent_message` | message to a sibling subagent's mailbox (`to` = its task id, or `"leader"`) |
 | `poll_agent_messages` | drain this subagent's mailbox |
 
+## Commands
+
+- `/subagents` — list runs; `/subagents peek` (or `ctrl+shift+a`) — browsable pane
+- `/subagents auto-bg on|off` — toggle background-by-default for subagent calls (persists to `~/.pi/agent/subagents-config.json`; default on). `off` makes calls block until the run finishes, result inline in the same turn. Bare `/subagents auto-bg` shows the current state.
+
 ## Peek — `/subagents peek` or `ctrl+shift+a`
 
 Read-only pane over the session's subagents:

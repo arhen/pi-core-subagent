@@ -200,9 +200,30 @@ export class SubagentManager {
 	private widgetRuns: RunSnapshot[] = [];
 	private eventSeq = 0;
 
+	/** Default for `background` when the agent doesn't say — toggle via `/subagents auto-bg on|off`. */
+	private autoBg = true;
+
 	turnActivity = false;
 
-	constructor(private readonly pi: ExtensionAPI) {}
+	constructor(private readonly pi: ExtensionAPI) {
+		try {
+			const cfg = JSON.parse(readFileSync(join(getAgentDir(), "subagents-config.json"), "utf8"));
+			if (typeof cfg.autoBg === "boolean") this.autoBg = cfg.autoBg;
+		} catch {
+			/* no config yet — default true */
+		}
+	}
+
+	/** Flip the background-by-default flag; persists to the agent dir. Returns the new value. */
+	setAutoBg(on: boolean): boolean {
+		this.autoBg = on;
+		void writeFile(join(getAgentDir(), "subagents-config.json"), JSON.stringify({ autoBg: on }, null, 2)).catch(() => {});
+		return on;
+	}
+
+	get autoBgOn(): boolean {
+		return this.autoBg;
+	}
 
 	/** Any run still has queued/running tasks? */
 	hasActiveRun(): boolean {
@@ -798,7 +819,7 @@ export class SubagentManager {
 			id: newId("run"),
 			mode,
 			status: "queued",
-			background: params.background ?? true,
+			background: params.background ?? this.autoBg,
 			allowIntercom: Boolean(params.allowIntercom),
 			notifyPerTask: params.notifyPerTask ?? true,
 			createdAt: Date.now(),
