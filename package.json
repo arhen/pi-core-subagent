@@ -1,5 +1,5 @@
 {
-  "name": "pi-minimalist-subagent",
+  "name": "@arhen/pi-subagent",
   "version": "0.2.9",
   "type": "module",
   "description": "Minimalist pi extension: fast in-process subagents with single/parallel/chain, background runs, intercom and agent-to-agent mailbox. Leader defines agents inline.",
@@ -36,6 +36,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/arhen/pi-minimalist-subagent.git"
+    "url": "git+https://github.com/arhen/pi-subagent.git"
   }
 }
