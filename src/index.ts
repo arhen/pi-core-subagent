@@ -162,6 +162,7 @@ export default function (pi: ExtensionAPI) {
 			"End each task with a runnable check, e.g. 'Verify: npx tsc --noEmit && bun test'. A subagent's claim of success is not evidence.",
 			"Define each agent yourself: invented name, focused system prompt, and read-only (default) or write:true. Prefer read-only.",
 			"Prefer blocking (background:false) whenever the run's result is something you must wait for before your next step — do not default to background for work you depend on inline. When a background run is active, settle its pending results and task dependencies (await_subagent / subagent_result, then continue dependent work) before starting unrelated work.",
+			"For long multi-task runs, don't park the whole turn on one blocking call: start it in the background, then loop await_subagent with short timeoutMs slices (e.g. 20s), processing whichever tasks completed in each slice while the rest keep running. You get incremental results instead of one big blocking wait.",
 			"allowIntercom:true only when a child may need to ask you something.",
 		],
 		parameters: SubagentParams,
