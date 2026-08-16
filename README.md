@@ -259,6 +259,8 @@ Background (default) + intercom — the run returns a runId immediately; you sta
 | `send_agent_message` | message to a sibling subagent's mailbox (`to` = its task id, or `"leader"`) |
 | `poll_agent_messages` | drain this subagent's mailbox |
 
+> **Intercom anti-deadlock:** children are told to never block indefinitely on intercom replies — `ask_parent` keeps the stall watchdog fed while awaiting a parent reply (background runs), and sibling polls are capped (~5 tries) with a proceed-with-best-judgment fallback. Gated siblings (later waves) may not be running yet — waiting on them is the top stall cause, so children are instructed not to.
+
 ## Commands
 
 - `/subagents` — list runs; `/subagents peek` (or `ctrl+shift+a`) — browsable pane
