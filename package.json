@@ -36,7 +36,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/arhen/pi-subagent.git"
+    "url": "git+https://github.com/arhen/pi-core-subagent.git"
   },
   "publishConfig": {
     "access": "public",

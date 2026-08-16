@@ -1,6 +1,6 @@
-# @arhen/pi-subagent
+# @arhen/pi-core-subagent
 
-[![npm version](https://img.shields.io/npm/v/%40arhen%2Fpi-subagent?color=cb3837&logo=npm)](https://www.npmjs.com/package/@arhen/pi-subagent)
+[![npm version](https://img.shields.io/npm/v/%40arhen%2Fpi-core-subagent?color=cb3837&logo=npm)](https://www.npmjs.com/package/@arhen/pi-core-subagent)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![pi extension](https://img.shields.io/badge/pi-extension-7c3aed)](https://github.com/earendil-works/pi)
 
@@ -20,7 +20,7 @@ Built for one job: delegate work to isolated subagents **without bloating the pa
 ## Install
 
 ```sh
-pi install npm:@arhen/pi-subagent
+pi install npm:@arhen/pi-core-subagent
 # or locally: pi install /path/to/pi-subagents
 ```
 
