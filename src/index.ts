@@ -12,12 +12,13 @@
  */
 
 import type { AgentSessionEvent, ExtensionAPI, ExtensionContext, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, DefaultResourceLoader, getAgentDir, ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { StringEnum, type Api, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { join } from "node:path";
 import { CHILD_TALK_TOOLS, createChildTools, createWatchdog, type ChildHandlers } from "./child.ts";
 import { createMailbox, type Mailbox } from "./mailbox.ts";
 
@@ -341,20 +342,40 @@ function cloneRun(run: RunSnapshot): RunSnapshot {
  *  Order: explicit "provider/model-id" or bare id (searched across available
  *  models) → agent file model → parent's current model (ctx.model) → undefined
  *  (createAgentSession falls back to settings). */
-function resolveChildModel(ctx: ExtensionContext, explicit: string | undefined) {
-	if (explicit?.trim()) {
-		const ref = explicit.trim();
-		const slash = ref.indexOf("/");
-		if (slash > 0 && slash < ref.length - 1) {
-			const model = ctx.modelRegistry.find(ref.slice(0, slash), ref.slice(slash + 1));
-			if (!model) throw new Error(`Model not found: ${ref}`);
-			return model;
-		}
-		const byId = ctx.modelRegistry.getAvailable().find((m) => m.id === ref);
-		if (!byId) throw new Error(`Model not found: ${ref}`);
-		return byId;
+export function resolveChildModel(ctx: ExtensionContext, explicit: string | undefined) {
+	if (!explicit?.trim()) return ctx.model; // inherit the parent's active model
+	const ref = explicit.trim();
+	const available = ctx.modelRegistry.getAvailable();
+	// Model ids can contain slashes (e.g. 9router/cc/claude-opus-5), so a bare id
+	// match and every provider/id split point must be tried, not just the first.
+	const byId = available.find((m) => m.id === ref);
+	if (byId) return byId;
+	for (let slash = ref.indexOf("/"); slash > 0; slash = ref.indexOf("/", slash + 1)) {
+		const model = ctx.modelRegistry.find(ref.slice(0, slash), ref.slice(slash + 1));
+		if (model) return model;
 	}
-	return ctx.model; // inherit the parent's active model
+	throw new Error(`Model not found: ${ref}`);
+}
+
+/** Extension-registered providers (e.g. 9router) live only in the parent's
+ *  in-memory runtime. A child builds its runtime from disk and would lose them,
+ *  so replay the parent's registrations before the child resolves auth. */
+async function createChildModelRuntime(ctx: ExtensionContext) {
+	const ids = ctx.modelRegistry.getRegisteredProviderIds?.() ?? [];
+	if (ids.length === 0) return undefined; // no extension providers: disk runtime is enough
+	const agentDir = getAgentDir();
+	const runtime = await ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: join(agentDir, "models.json") });
+	for (const id of ids) {
+		const native = ctx.modelRegistry.getRegisteredNativeProvider?.(id);
+		if (native) {
+			runtime.registerNativeProvider(native);
+			continue;
+		}
+		const config = ctx.modelRegistry.getRegisteredProviderConfig?.(id);
+		if (config) runtime.registerProvider(id, config);
+	}
+	await runtime.refresh({ allowNetwork: false });
+	return runtime;
 }
 
 /** Validate a thinking level against the RESOLVED model's registry entry.
@@ -731,6 +752,7 @@ class SubagentManager {
 			const created = await createAgentSession({
 				cwd: task.cwd,
 				agentDir: getAgentDir(),
+				modelRuntime: await createChildModelRuntime(ctx),
 				resourceLoader: loader,
 				sessionManager: SessionManager.create(task.cwd, undefined, { parentSession: getParentSessionFile(ctx) }),
 				model,

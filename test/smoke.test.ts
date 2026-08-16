@@ -3,7 +3,7 @@
  * Pure logic only — no pi runtime needed. Run: bun test
  */
 import { describe, expect, test } from "bun:test";
-import { classifyFailure, validateThinking } from "../src/index.ts";
+import { classifyFailure, resolveChildModel, validateThinking } from "../src/index.ts";
 import { createWatchdog } from "../src/child.ts";
 import { createMailbox } from "../src/mailbox.ts";
 
@@ -85,5 +85,34 @@ describe("validateThinking", () => {
 	test("undefined model/level → no-op", () => {
 		expect(() => validateThinking(undefined, "high")).not.toThrow();
 		expect(() => validateThinking(reasoningModel, "undefined")).not.toThrow();
+	});
+});
+
+describe("resolveChildModel", () => {
+	// Model ids may contain slashes (9router/cc/claude-opus-5), so the first "/"
+	// is not always the provider boundary.
+	const models = [
+		{ provider: "9router", id: "cc/claude-opus-5" },
+		{ provider: "anthropic", id: "claude-opus-5" },
+	] as never[];
+	const ctx = {
+		model: { provider: "parent", id: "inherited" },
+		modelRegistry: {
+			getAvailable: () => models,
+			find: (p: string, id: string) => models.find((m: never) => (m as never as { provider: string; id: string }).provider === p && (m as never as { id: string }).id === id),
+		},
+	} as never as Parameters<typeof resolveChildModel>[0];
+
+	test("resolves provider/id where the id itself contains slashes", () => {
+		expect(resolveChildModel(ctx, "9router/cc/claude-opus-5")).toBe(models[0]);
+	});
+	test("resolves a bare id", () => {
+		expect(resolveChildModel(ctx, "claude-opus-5")).toBe(models[1]);
+	});
+	test("inherits the parent model when unset", () => {
+		expect(resolveChildModel(ctx, undefined)).toMatchObject({ provider: "parent", id: "inherited" });
+	});
+	test("throws on unknown refs", () => {
+		expect(() => resolveChildModel(ctx, "cc/nope")).toThrow("Model not found");
 	});
 });
