@@ -402,13 +402,14 @@ class SubagentManager {
 		return false;
 	}
 
-	/** Hide the widget. */
+	/** Hide the widget + clear the footer status entry. */
 	clearWidget(ctx: ExtensionContext): void {
 		this.widgetRuns = [];
 		this.widgetTui = null;
 		if (ctx.hasUI) {
 			try {
 				ctx.ui.setWidget("subagents", undefined);
+				ctx.ui.setStatus("subagents", undefined);
 			} catch {
 				/* ignore */
 			}
