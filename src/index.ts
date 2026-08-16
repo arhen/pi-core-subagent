@@ -201,7 +201,7 @@ export default function (pi: ExtensionAPI) {
 					const id = t.id ?? `task_${i + 1}`;
 					const edge = t.needs?.length ? theme.fg("muted", ` ← ${t.needs.join(", ")}`) : "";
 					const mark = t.write ? theme.fg("warning", " ✎") : "";
-					const meta = [t.model ? t.model : "", t.thinking ? `effort:${t.thinking}` : ""]
+					const meta = [t.model ? t.model : "", t.thinking ? t.thinking : ""]
 						.filter(Boolean)
 						.join(" ");
 					// Plain clip, not truncateText — that one appends a multi-line session-file notice.
