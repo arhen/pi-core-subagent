@@ -177,9 +177,9 @@ export default function (pi: ExtensionAPI) {
 					: args.agent
 						? `single ${args.agent}`
 						: "preparing…";
-			const flags = [args.background ? "background" : "", args.allowIntercom ? "can ask" : ""]
+			const flags = [(args.background ?? manager.autoBgOn) ? "bg" : "blocking", args.allowIntercom ? "a2a" : ""]
 				.filter(Boolean)
-				.join(", ");
+				.join(" · ");
 			// Params used, dimmed: model, thinking, toolset, per-task write count.
 			const tasks = args.tasks ?? args.chain ?? [];
 			const writeCount = tasks.filter((t) => t.write).length;
@@ -201,12 +201,15 @@ export default function (pi: ExtensionAPI) {
 					const id = t.id ?? `task_${i + 1}`;
 					const edge = t.needs?.length ? theme.fg("muted", ` ← ${t.needs.join(", ")}`) : "";
 					const mark = t.write ? theme.fg("warning", " ✎") : "";
+					const meta = [t.model ? `model:${t.model}` : "", t.thinking ? `effort:${t.thinking}` : ""]
+						.filter(Boolean)
+						.join(" ");
 					// Plain clip, not truncateText — that one appends a multi-line session-file notice.
 					const flat = String(t.task ?? "")
 						.replace(/\s+/g, " ")
 						.trim();
 					const what = flat ? theme.fg("dim", ` ${flat.length > 64 ? `${flat.slice(0, 64)}…` : flat}`) : "";
-					return `\n  ${theme.fg("muted", id)} ${theme.fg("accent", t.agent ?? "…")}${mark}${edge}${what}`;
+					return `\n  ${theme.fg("muted", id)} ${theme.fg("accent", t.agent ?? "…")}${mark}${edge}${meta ? ` ${theme.fg("dim", meta)}` : ""}${what}`;
 				})
 				.join("");
 			return new Text(
