@@ -409,7 +409,6 @@ class SubagentManager {
 		if (ctx.hasUI) {
 			try {
 				ctx.ui.setWidget("subagents", undefined);
-				ctx.ui.setStatus("subagents", undefined);
 			} catch {
 				/* ignore */
 			}
@@ -529,8 +528,6 @@ class SubagentManager {
 			if (this.widgetRuns.length === 0) return;
 			const targets = [...this.widgetRuns]; // read at fire: never render stale runs
 			if (ctx?.hasUI) {
-				const live = targets.reduce((n, r) => n + r.tasks.filter((t) => !TERMINAL.includes(t.status)).length, 0);
-				ctx.ui.setStatus("subagents", `subagents: ${live} running`);
 				this.ensureWidget(ctx);
 				this.widgetTui?.requestRender();
 			}
@@ -1090,7 +1087,6 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_shutdown", async (_event, ctx) => {
 		if (ctx?.hasUI) {
 			try {
-				ctx.ui.setStatus("subagents", "");
 				ctx.ui.setWidget("subagents", [], { placement: "aboveEditor" });
 			} catch {
 				/* ignore */
