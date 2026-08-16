@@ -190,6 +190,13 @@ interface ChildEventState {
 	childEndResolve?: () => void;
 }
 
+export interface ParkedMsg {
+	kind: "ask" | "notify" | "done";
+	taskId: string;
+	agent: string;
+	text: string;
+}
+
 export class SubagentManager {
 	private runs = new Map<string, RunSnapshot>();
 	private settlers = new Map<string, (run: RunSnapshot) => void>();
@@ -361,6 +368,11 @@ export class SubagentManager {
 	/** Per-task wake-up: queued follow-up so the parent can interleave responses. */
 	private notifyTask(run: RunSnapshot, task: TaskSnapshot, kind: "completed" | "failed" | "aborted"): void {
 		const body = makeTaskNotice(run, task, kind);
+		// Parked leader (await_subagent) receives completions through the wait — no queue.
+		if (this.collectParked(run.id, { kind: "done", taskId: task.id, agent: task.agent, text: body })) {
+			this.emit("subagent:notification", { runId: run.id, taskId: task.id, kind, body });
+			return;
+		}
 		try {
 			this.pi.sendUserMessage(body, { deliverAs: "followUp" });
 		} catch {
@@ -492,6 +504,11 @@ export class SubagentManager {
 			onAskParent: async (_taskId, question) => {
 				this.updateTask(run, task, { status: "awaiting_parent" }, ctx);
 				this.liveChildren.get(`${run.id}:${task.id}`)?.touchWatchdog();
+				// While the leader is parked in await_subagent, the question rides the wait
+				// instead of the steering queue — no boundary needed, no starvation.
+				if (this.collectParked(run.id, { kind: "ask", taskId: task.id, agent: task.agent, text: question })) {
+					return "Your question was delivered to the parent (they're waiting on this run). Keep working; the answer arrives via the pending reply.";
+				}
 				// A blocking run's parent can't reply mid-tool (followUp only fires after the
 				// tool returns) — only background runs can truly wait for the answer.
 				if (!run.background) {
@@ -513,6 +530,7 @@ export class SubagentManager {
 			},
 			onNotifyParent: (_taskId, message, level) => {
 				this.emit("subagent:intercom", { runId: run.id, taskId: task.id, kind: "notify", level, message });
+				if (this.collectParked(run.id, { kind: "notify", taskId: task.id, agent: task.agent, text: message })) return;
 				if (!run.awaited) {
 					try {
 						this.pi.sendUserMessage(`[Subagent ${task.agent}] ${message}`, { deliverAs: "followUp" });
@@ -530,6 +548,7 @@ export class SubagentManager {
 						level: "info",
 						message: text,
 					});
+					if (this.collectParked(run.id, { kind: "notify", taskId: task.id, agent: task.agent, text })) return true;
 					if (!run.awaited) {
 						try {
 							this.pi.sendUserMessage(`[Subagent ${task.agent}] ${text}`, { deliverAs: "followUp" });
@@ -1095,40 +1114,63 @@ export class SubagentManager {
 		s(cloneRun(run));
 	}
 
-	awaitRun(runId: string, timeoutMs?: number): Promise<RunSnapshot | undefined> {
+	/** Child→leader messages collected while the parent is parked in await_subagent. */
+	/** Child→leader messages collected while the parent is parked in await_subagent. */
+	private parked = new Map<string, { msgs: ParkedMsg[]; wake: () => void }>();
+
+	/** While the parent is parked on this run, deliver the message through the wait instead of the steering queue. */
+	private collectParked(runId: string, msg: ParkedMsg): boolean {
+		const p = this.parked.get(runId);
+		if (!p) return false;
+		if (p.msgs.length < 24) p.msgs.push(msg);
+		p.wake(); // resolve the parked await early — the leader breathes on every message
+		return true;
+	}
+
+	awaitRun(
+		runId: string,
+		timeoutMs?: number,
+	): Promise<{ run: RunSnapshot | undefined; intercom: ParkedMsg[] } | undefined> {
 		const run = this.runs.get(runId);
 		if (!run) return Promise.resolve(undefined);
+		const finish = (): void => {
+			this.parked.delete(runId);
+		};
 		if (TERMINAL.includes(run.status)) {
 			run.awaited = true;
-			return Promise.resolve(cloneRun(run));
+			return Promise.resolve({ run: cloneRun(run), intercom: [] });
 		}
+		const msgs: ParkedMsg[] = [];
 		const settled = new Promise<RunSnapshot | undefined>((resolve) => {
 			const prev = this.settlers.get(runId);
 			this.settlers.set(runId, (r) => {
 				prev?.(r);
 				resolve(r);
 			});
+			// A child→leader message while parked wakes the wait: the leader gets it
+			// IN the await result, no steering queue, no turn boundary needed.
+			this.parked.set(runId, { msgs, wake: () => resolve(cloneRun(run)) });
 		});
 		if (timeoutMs) {
 			return Promise.race([
 				settled.then((r) => {
-					// settled won: the parent got the real result — suppress the notice.
+					finish();
 					run.awaited = true;
-					return r;
+					return { run: r, intercom: msgs };
 				}),
-				new Promise<RunSnapshot | undefined>((resolve) => {
-					const timer = setTimeout(
-						() => resolve(this.runs.get(runId) ? cloneRun(this.runs.get(runId)!) : undefined),
-						timeoutMs,
-					);
+				new Promise<{ run: RunSnapshot | undefined; intercom: ParkedMsg[] } | undefined>((resolve) => {
+					const timer = setTimeout(() => {
+						finish();
+						resolve(this.runs.get(runId) ? { run: cloneRun(this.runs.get(runId)!), intercom: msgs } : undefined);
+					}, timeoutMs);
 					settled.then(() => clearTimeout(timer));
 				}),
 			]);
 		}
-		// Awaiting to completion: parent gets the real result, so suppress the
-		// completion notice. On timeout we resolve a snapshot and leave awaited
-		// unset, so the parent still receives the completion notification.
-		run.awaited = true;
-		return settled;
+		return settled.then((r) => {
+			finish();
+			run.awaited = true;
+			return { run: r, intercom: msgs };
+		});
 	}
 }

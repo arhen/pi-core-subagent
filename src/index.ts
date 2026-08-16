@@ -310,13 +310,22 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool<typeof AwaitParam, { run?: RunSnapshot }>({
 		name: "await_subagent",
 		label: "Await Subagent",
-		description: "Block until a run finishes (or timeoutMs elapses). Use when you need the result before proceeding.",
+		description:
+			"Block until a run finishes (or timeoutMs elapses). While parked, child→leader messages (asks, notifies, completions) wake the wait and arrive INSIDE the result — the await doubles as the run's intercom drain, no steering queue involved.",
 		parameters: AwaitParam,
 		async execute(_id, params) {
 			const { runId, timeoutMs } = params as { runId: string; timeoutMs?: number };
-			const run = await manager.awaitRun(runId, timeoutMs);
+			const awaited = await manager.awaitRun(runId, timeoutMs);
+			if (!awaited) return { content: [{ type: "text", text: `Unknown runId: ${runId}` }], isError: true, details: {} };
+			const { run, intercom } = awaited;
 			if (!run) return { content: [{ type: "text", text: `Unknown runId: ${runId}` }], isError: true, details: {} };
-			return { content: [{ type: "text", text: makeSummary(run) }], details: { run } };
+			const intercomText =
+				intercom.length > 0
+					? `\n\nIntercom while waiting:\n${intercom
+							.map((m) => `- [${m.kind}] ${m.agent} (${m.taskId}): ${truncateText(m.text)}`)
+							.join("\n")}`
+					: "";
+			return { content: [{ type: "text", text: makeSummary(run) + intercomText }], details: { run } };
 		},
 	});
 

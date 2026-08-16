@@ -49,9 +49,9 @@ describe("cancel", () => {
 		const { aborted } = m.cancelRun(run.id);
 		expect(aborted).toBe(2);
 		const snap = await pending;
-		expect(snap?.status).toBe("aborted");
-		expect(snap?.tasks.every((t) => t.status === "aborted")).toBe(true);
-		expect(snap?.tasks[0]?.error).toBe("Canceled by subagent_cancel");
+		expect(snap?.run?.status).toBe("aborted");
+		expect(snap?.run?.tasks.every((t) => t.status === "aborted")).toBe(true);
+		expect(snap?.run?.tasks[0]?.error).toBe("Canceled by subagent_cancel");
 	});
 	test("cancelRun on unknown or finished run is a no-op", () => {
 		const m = makeManager();
@@ -81,6 +81,6 @@ describe("cancel", () => {
 		const { run } = m.createRun({ tasks: [{ agent: "a", task: "t1" }] }, stubCtx);
 		m.cancelRun(run.id);
 		const snap = await m.awaitRun(run.id);
-		expect(snap?.status).toBe("aborted");
+		expect(snap?.run?.status).toBe("aborted");
 	});
 });
