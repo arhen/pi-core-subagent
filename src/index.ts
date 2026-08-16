@@ -1226,17 +1226,17 @@ export default function (pi: ExtensionAPI) {
 					: args.agent
 						? `single ${args.agent}`
 						: "preparing…";
-			const flags = [args.background ? "bg" : "", args.allowIntercom ? "talk" : ""].filter(Boolean).join(" ");
+			const flags = [args.background ? "background" : "", args.allowIntercom ? "can ask" : ""].filter(Boolean).join(", ");
 			// Params used, dimmed: model, thinking, toolset, per-task write count.
 			const tasks = args.tasks ?? args.chain ?? [];
 			const writeCount = tasks.filter((t: any) => t.write).length;
 			const parts: string[] = [];
 			if (args.model) parts.push(args.model);
 			if (args.thinking) parts.push(args.thinking);
-			if (args.write) parts.push("write");
-			if (writeCount > 0) parts.push(`${writeCount} write`);
-			if (args.concurrency) parts.push(`c${args.concurrency}`);
-			if (args.maxRuntimeMs) parts.push(`${Math.round(args.maxRuntimeMs / 60000)}m`);
+			if (args.write) parts.push("can edit");
+			if (writeCount > 0) parts.push(`${writeCount} can edit`);
+			if (args.concurrency) parts.push(`${args.concurrency} at a time`);
+			if (args.maxRuntimeMs) parts.push(`${Math.round(args.maxRuntimeMs / 60000)}m limit`);
 			const params = parts.length > 0 ? `\n  ${theme.fg("dim", parts.join(" · "))}` : "";
 			return new Text(`${theme.fg("toolTitle", theme.bold("subagent"))} ${theme.fg("accent", mode)}${flags ? ` ${theme.fg("muted", `[${flags}]`)}` : ""}${params}`, 0, 0);
 		},
