@@ -73,9 +73,12 @@ test("describeCall renders human activity lines", () => {
 
 test("colorNums never colors inside ANSI escapes", () => {
 	const theme = { fg: (c: string, s: string) => `\x1b[${c === "syntaxNumber" ? "38;2;1;2;3" : "38;2;9;9;9"}m${s}\x1b[0m` } as any;
-	const out = colorNums("16 tools · 6 turns", theme);
+	const out = colorNums("16 tools · ↑ 460.6k · running 2m30s", theme);
+	// Value + unit is one token: "460.6k" and "2m30s" must not be split mid-number.
+	expect(out).toContain("38;2;1;2;3m460.6k\x1b[0m");
+	expect(out).toContain("38;2;1;2;3m2m30s\x1b[0m");
 	// Strip escapes: the visible text must be unchanged.
-	expect(out.replace(/\x1b\[[0-9;]*m/g, "")).toBe("16 tools · 6 turns");
+	expect(out.replace(/\x1b\[[0-9;]*m/g, "")).toBe("16 tools · ↑ 460.6k · running 2m30s");
 });
 
 test("peek rows are full-width so the transcript can't bleed through", () => {

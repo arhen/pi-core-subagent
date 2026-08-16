@@ -232,7 +232,8 @@ function taskLine(task: TaskSnapshot): string {
  * inside the ANSI escape codes themselves ("38;2;139;136;122m16 tools").
  */
 export function colorNums(text: string, theme: Theme): string {
-	return text.replace(/(\d+(?:\.\d+)?)|([^\d]+)/g, (_m, num?: string, rest?: string) => (num ? theme.fg("syntaxNumber", num) : theme.fg("muted", rest ?? "")));
+	// A value keeps its unit: "460.6k" and "2m30s" each color as one token, not digit-by-digit.
+	return text.replace(/((?:\d+(?:\.\d+)?[a-zA-Z]*)+)|([^\d]+)/g, (_m, num?: string, rest?: string) => (num ? theme.fg("syntaxNumber", num) : theme.fg("muted", rest ?? "")));
 }
 /**
  * Themed one-liner. Finished tasks dim entirely (stats included); live tasks
