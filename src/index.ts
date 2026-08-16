@@ -33,6 +33,7 @@ import {
 	ReplyParam,
 	ResultParam,
 	RunIdParam,
+	SteerParam,
 	SubagentParams,
 	type SubagentParamsShape,
 } from "./schemas.ts";
@@ -311,6 +312,33 @@ export default function (pi: ExtensionAPI) {
 				};
 			return {
 				content: [{ type: "text", text: `Reply delivered to ${runId}/${taskId}. The child will resume.` }],
+				details: {},
+			};
+		},
+	});
+
+	pi.registerTool<typeof SteerParam, { steered?: string[] }>({
+		name: "steer_subagent",
+		label: "Steer Subagent",
+		description:
+			"Inject a steering message into a running subagent's session (queues as steer if the child is mid-turn; delivered at its next model boundary).",
+		parameters: SteerParam,
+		async execute(_id, params) {
+			const { runId, taskId, message } = params as { runId: string; taskId?: string; message: string };
+			const ok = manager.steerTask(runId, taskId, message);
+			if (!ok)
+				return {
+					content: [{ type: "text", text: `No running task(s) for ${runId}${taskId ? `/${taskId}` : ""}.` }],
+					isError: true,
+					details: {},
+				};
+			return {
+				content: [
+					{
+						type: "text",
+						text: `Steering message queued for ${runId}${taskId ? `/${taskId}` : " (all running tasks)"}.`,
+					},
+				],
 				details: {},
 			};
 		},

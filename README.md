@@ -241,6 +241,7 @@ Background (default) + intercom — the run returns a runId immediately; you sta
 | `subagent_result` | full output of a run or one task |
 | `await_subagent` | block until a run finishes (optional `timeoutMs`) |
 | `reply_subagent` | answer a child's `ask_parent` question |
+| `steer_subagent` | inject a steering message into a running child's session (queues as steer if mid-turn; lands at its next model boundary) |
 | `subagent_cancel` | abort a running/queued run |
 
 ### Per-task fields

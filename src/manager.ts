@@ -193,7 +193,10 @@ export class SubagentManager {
 	private runs = new Map<string, RunSnapshot>();
 	private settlers = new Map<string, (run: RunSnapshot) => void>();
 	private pendingReplies = new Map<string, PendingReply>();
-	private liveChildren = new Map<string, { abort: () => void; dispose: () => void; touchWatchdog: () => void }>();
+	private liveChildren = new Map<
+		string,
+		{ abort: () => void; dispose: () => void; touchWatchdog: () => void; steer: (message: string) => void }
+	>();
 	private mailboxes: Mailbox = createMailbox();
 	private runControllers = new Map<string, AbortController>();
 	private widgetTimers = new Map<string, ReturnType<typeof setTimeout>>(); // per-run stream throttle
@@ -721,6 +724,13 @@ export class SubagentManager {
 				abort: () => void child?.abort(),
 				dispose: () => watchdog.dispose(),
 				touchWatchdog: () => watchdog.touch(),
+				// Inject a steering message mid-run; queues as steer if the child is streaming.
+				steer: (message) =>
+					void child?.prompt(message, { streamingBehavior: "steer" }).catch((err) =>
+						this.pi.sendUserMessage(`[steer_subagent] ${err instanceof Error ? err.message : String(err)}`, {
+							deliverAs: "followUp",
+						}),
+					),
 			});
 
 			const maxRuntimeMs = input.maxRuntimeMs ?? DEFAULT_RUNTIME_MS;
@@ -982,6 +992,16 @@ export class SubagentManager {
 				this.persist(ctx);
 			});
 		return { run: cloneRun(run), background: true };
+	}
+
+	/** Push a steering message into a live child's session. Returns false when unknown or not running. */
+	steerTask(runId: string, taskId: string | undefined, message: string): boolean {
+		const run = this.runs.get(runId);
+		if (!run) return false;
+		const ids = taskId ? [taskId] : run.tasks.map((t) => t.id).filter((id) => this.liveChildren.has(`${runId}:${id}`));
+		if (ids.length === 0) return false;
+		for (const id of ids) this.liveChildren.get(`${runId}:${id}`)?.steer(message);
+		return true;
 	}
 
 	/** Abort ONE task; siblings keep running. Returns false when unknown or already finished. */

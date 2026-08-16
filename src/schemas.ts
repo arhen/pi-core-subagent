@@ -91,3 +91,8 @@ export const ReplyParam = Type.Object({
 	taskId: Type.String(),
 	message: Type.String({ description: "Answer for the child" }),
 });
+export const SteerParam = Type.Object({
+	runId: Type.String(),
+	taskId: Type.Optional(Type.String({ description: "Specific task id; defaults to all still-running tasks" })),
+	message: Type.String({ description: "Steering message to inject into the child's session" }),
+});
