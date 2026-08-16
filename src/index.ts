@@ -1252,12 +1252,7 @@ const TaskItem = Type.Object({
 	cwd: Type.Optional(Type.String({ description: "Working directory for this task. Default: current project." })),
 	tools: Type.Optional(Type.Array(Type.String(), { description: "Explicit tool allowlist (overrides the toolset)" })),
 	maxRuntimeMs: Type.Optional(Type.Number({ description: "Per-task timeout (ms)" })),
-	needs: Type.Optional(
-		Type.Array(Type.String(), {
-			description:
-				"Task ids this task depends on (requires those tasks to declare id). It starts only after they finish, and their outputs are prepended to its prompt. Tasks with no unmet needs run together as a wave.",
-		}),
-	),
+	needs: Type.Optional(Type.Array(Type.String(), { description: "Ids of tasks this one waits for; their outputs are prepended to this prompt." })),
 });
 
 type SubagentParamsShape = {
@@ -1380,18 +1375,18 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool<typeof SubagentParams, RunDetails>({
 		name: "subagent",
 		label: "Subagent",
-		description: "Define and run isolated subagents (own context, own session). You invent the agent: name, optional system prompt, toolset (read-only default, write:true for edits). Modes: single, parallel (tasks), chain ({previous}). Tasks with `needs` form a dependency graph: each wave of tasks with satisfied needs runs in parallel, and an upstream task's output is prepended to its dependents' prompts. background:true fire-and-forgets with completion notice. allowIntercom:true lets children ask you questions and message each other.\n\nExamples (copy these shapes):\nSingle: subagent({ agent: \"reviewer\", prompt: \"You review code for correctness\", task: \"Review src/auth.ts\" })\nParallel: subagent({ tasks: [{ agent: \"mapper\", task: \"Map all API routes\" }, { agent: \"critic\", task: \"Review auth for vulnerabilities\" }] })\nGraph: subagent({ tasks: [{ id: \"api\", agent: \"api-mapper\", task: \"Map API routes\" }, { id: \"db\", agent: \"db-mapper\", task: \"Map DB schema\" }, { id: \"doc\", agent: \"writer\", needs: [\"api\", \"db\"], write: true, task: \"Write ARCHITECTURE.md. Verify: test -s ARCHITECTURE.md\" }] })\nChain: subagent({ chain: [{ agent: \"planner\", task: \"Plan the change\" }, { agent: \"doer\", write: true, task: \"Execute: {previous}\" }] })\nBackground: subagent({ agent: \"auditor\", task: \"Audit deps\", background: true })",
+		// ponytail: this string is billed on every request. One example — the graph one —
+		// covers ids, needs, write and Verify; the simpler shapes are subsets of it.
+		description:
+			"Run isolated subagents (own context, own session). You invent each agent: name, optional system prompt, toolset (read-only default, write:true to edit). Use `agent`+`task` for one, `tasks` for many. `needs` declares dependency edges: a task waits for its needs and receives their outputs prepended to its prompt. background:true returns immediately; allowIntercom:true lets children talk to you and each other.\n\nsubagent({ tasks: [{ id: \"api\", agent: \"api-mapper\", task: \"Map API routes\" }, { id: \"db\", agent: \"db-mapper\", task: \"Map DB schema\" }, { id: \"doc\", agent: \"writer\", needs: [\"api\", \"db\"], write: true, task: \"Write ARCHITECTURE.md. Verify: test -s ARCHITECTURE.md\" }] })",
 		promptSnippet: "Define and delegate work to specialized subagents.",
 		promptGuidelines: [
 			"Use subagent when independent review, testing, research, or parallel analysis improves quality.",
-			"Decompose parallelizable work: if the request has 2+ independent sub-tasks (separate files, separate concerns, independent research/review), spawn N agents with a SINGLE call: subagent({ tasks: [{agent, task}, ...] }). NEVER make multiple parallel subagent calls for parallel work — one call, one run, N tasks.",
-			"If independent sub-tasks are sequential (each builds on the previous one's output), use chain mode with {previous}.",
-			"When some tasks depend on others but not all do, give tasks an `id` and list `needs`. Independent tasks then still run in parallel while dependents wait, and each dependent receives its upstream outputs automatically — do not re-describe them in the prompt.",
-			"Give every task a way to check itself: end the task text with a runnable command, e.g. 'Verify: npx tsc --noEmit && bun test'. A subagent's own claim of success is not evidence.",
-			"Define each subagent yourself: an invented name, a focused system prompt (prompt:), and a toolset — read-only (default) or write (write:true).",
-			"Prefer read-only subagents unless the task explicitly needs edits.",
-			"Use background:true for long-running work; you'll be notified on completion.",
-			"Use allowIntercom:true only when a child may need to ask you something; keep children autonomous otherwise.",
+			"Put every sub-task in ONE call: subagent({ tasks: [...] }). Never make multiple parallel subagent calls — one call, one run, N tasks.",
+			"Order comes from `needs`, not from separate calls: give tasks an `id`, list the ids each depends on. Tasks with no unmet needs run in parallel; dependents receive their upstream outputs automatically — do not restate them.",
+			"End each task with a runnable check, e.g. 'Verify: npx tsc --noEmit && bun test'. A subagent's claim of success is not evidence.",
+			"Define each agent yourself: invented name, focused system prompt, and read-only (default) or write:true. Prefer read-only.",
+			"Use background:true for long work; allowIntercom:true only when a child may need to ask you something.",
 		],
 		parameters: SubagentParams,
 		executionMode: "parallel", // sibling subagent calls run concurrently, not serialized
