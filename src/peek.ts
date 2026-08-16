@@ -105,7 +105,7 @@ export function createPeekPane(
 			selected = clamp(selected, tasks.length);
 			if (tasks.length === 0) return [theme.fg("dim", "No subagents in this session.")];
 			const task = tasks[selected]!;
-			const hint = confirming ? theme.fg("error", `abort ${task.agent}? y / n`) : tailing ? "esc back · x abort" : "↑↓ move · enter tail · x abort · esc close";
+			const hint = confirming ? theme.fg("error", `abort ${task.agent}? y / n`) : tailing ? "esc back · x abort" : "shift+↑↓ or j/k move · enter tail · x abort · esc close";
 			const head = `${theme.fg("accent", theme.bold(tailing ? task.agent : "Subagents"))} ${theme.fg("dim", `(${selected + 1}/${tasks.length}) · ${hint}`)}`;
 			if (!tailing) {
 				return [head, ...tasks.map((t, i) => truncateToWidth(`${i === selected ? theme.fg("accent", "❯ ") : "  "}${t.line}`, width, "…"))];
@@ -136,9 +136,10 @@ export function createPeekPane(
 				tailing = true;
 			} else if (matchesKey(data, Key.left)) {
 				tailing = false;
-			} else if (matchesKey(data, Key.up)) {
+			} else if (matchesKey(data, "shift+up") || matchesKey(data, Key.up) || data === "k") {
+				// shift+↑↓ and j/k are the reliable pair: bare arrows can be eaten by prompt history.
 				selected = clamp(selected - 1, len);
-			} else if (matchesKey(data, Key.down)) {
+			} else if (matchesKey(data, "shift+down") || matchesKey(data, Key.down) || data === "j") {
 				selected = clamp(selected + 1, len);
 			}
 			requestRender();

@@ -1241,7 +1241,7 @@ export default function (pi: ExtensionAPI) {
 			{ overlay: true, overlayOptions: { anchor: "center", width: "80%", maxHeight: "70%" } },
 		);
 	};
-	pi.registerCommand("peek", { description: "Peek at running subagents (↑↓ move, enter tails)", handler: (_args, ctx) => openPeek(ctx) });
+	pi.registerCommand("peek", { description: "Peek at running subagents (shift+↑↓ or j/k move, enter tails)", handler: (_args, ctx) => openPeek(ctx) });
 	// ctrl+shift+s belongs to pi-web-access (search curator); 'a' for agents is free.
 	pi.registerShortcut("ctrl+shift+a", { description: "Peek at running subagents", handler: openPeek });
 

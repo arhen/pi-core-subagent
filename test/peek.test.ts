@@ -30,6 +30,10 @@ test("peek pane: navigate + tail, never mutates tasks", () => {
 	pane.handleInput("\x1b[B"); // down
 	expect(pane.render(80).join("\n")).toMatch(/❯ • rev-b/);
 	pane.handleInput("\x1b[A"); // up
+	pane.handleInput("j"); // vim down
+	expect(pane.render(80).join("\n")).toMatch(/❯ • rev-b/);
+	pane.handleInput("\x1b[1;2A"); // shift+up
+	expect(pane.render(80).join("\n")).toMatch(/❯ • rev-a/);
 	pane.handleInput("\r"); // enter → tail
 	const tail = pane.render(80).join("\n");
 	expect(tail).toMatch(/→ read/);

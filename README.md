@@ -104,7 +104,7 @@ Background + intercom:
 
 Read-only pane over the session's subagents:
 
-- `↑`/`↓` — move between agents
+- `shift+↑`/`shift+↓` (or `j`/`k`) — move between agents; bare arrows work too where the terminal doesn't reserve them
 - `enter` — live tail of that child's session file (`esc` goes back)
 - `x` then `y` — abort ONE subagent (only mutation; `n`/any other key cancels)
 - `esc` — close
