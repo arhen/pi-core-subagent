@@ -1218,7 +1218,14 @@ export default function (pi: ExtensionAPI) {
 			return { content: [{ type: "text", text: makeSummary(details.run) }], details };
 		},
 		renderCall(args, theme) {
-			const mode = args.chain?.length ? `chain ${args.chain.length}` : args.tasks?.length ? `parallel ${args.tasks.length}` : `single ${args.agent ?? "?"}`;
+			// ponytail: args stream in partially, so mode is unknowable until JSON closes. Show "preparing…" instead of a wrong "single ?".
+			const mode = args.chain?.length
+				? `chain ${args.chain.length}`
+				: args.tasks?.length
+					? `parallel ${args.tasks.length}`
+					: args.agent
+						? `single ${args.agent}`
+						: "preparing…";
 			const flags = [args.background ? "bg" : "", args.allowIntercom ? "talk" : ""].filter(Boolean).join(" ");
 			// Params used, dimmed: model, thinking, toolset, per-task write count.
 			const tasks = args.tasks ?? args.chain ?? [];
