@@ -251,6 +251,10 @@ function compactLines(run: RunSnapshot): string[] {
  *   └─ ✓ reviewer · 6 tools · 44s
  * Static icons (no animation); latest activity + tool count + runtime per agent.
  */
+const WIDGET_MAX_RUNS = 3;
+const WIDGET_MAX_TASKS_PER_RUN = 4;
+const WIDGET_MAX_LINES = 10;
+
 class SubagentsWidget implements Component {
 	constructor(
 		private readonly getRuns: () => RunSnapshot[],
@@ -265,17 +269,18 @@ class SubagentsWidget implements Component {
 		const runs = this.getRuns();
 		if (runs.length === 0) return [];
 		const lines: string[] = [];
-		runs.forEach((run, ri) => {
-			if (run.tasks.length === 0) return;
-			if (ri > 0) lines.push("");
+		let renderedRuns = 0;
+		for (const run of runs.slice(0, WIDGET_MAX_RUNS)) {
+			if (run.tasks.length === 0) continue;
+			if (lines.length > 0) lines.push("");
 			const done = run.tasks.filter((t) => TERMINAL.includes(t.status)).length;
 			const active = !TERMINAL.includes(run.status);
 			const head = active ? "accent" : "dim";
 			lines.push(truncateToWidth(`${this.theme.fg(head, active ? "●" : "○")} ${this.theme.fg(head, `Subagents (${done}/${run.tasks.length})`)}`, width, "…"));
 			const allDone = TERMINAL.includes(run.status);
-			const visible = run.tasks.slice(0, MAX_TASKS);
+			const visible = run.tasks.slice(0, WIDGET_MAX_TASKS_PER_RUN);
 			visible.forEach((task, i) => {
-				const last = i === visible.length - 1 && run.tasks.length <= MAX_TASKS;
+				const last = i === visible.length - 1 && run.tasks.length <= WIDGET_MAX_TASKS_PER_RUN;
 				const conn = this.theme.fg("dim", last ? "└─" : "├─");
 				const activity =
 					!TERMINAL.includes(task.status) && task.lastActivity
@@ -287,8 +292,12 @@ class SubagentsWidget implements Component {
 					: `${statusIcon(task.status)} ${task.agent} · ${activity}${taskStatsWithUsage(task)} · ${taskTimer(task)}`;
 				lines.push(truncateToWidth(`${conn} ${line}`, width, "…"));
 			});
-			if (run.tasks.length > MAX_TASKS) lines.push(`${this.theme.fg("dim", "└─")} ${this.theme.fg("dim", `+${run.tasks.length - MAX_TASKS} more`)}`);
-		});
+			if (run.tasks.length > WIDGET_MAX_TASKS_PER_RUN) lines.push(`${this.theme.fg("dim", "└─")} ${this.theme.fg("dim", `+${run.tasks.length - WIDGET_MAX_TASKS_PER_RUN} more tasks`)}`);
+			renderedRuns += 1;
+			if (lines.length >= WIDGET_MAX_LINES) break; // keep the editor visible
+		}
+		const hiddenRuns = runs.length - renderedRuns;
+		if (hiddenRuns > 0) lines.push(`${this.theme.fg("dim", "└─")} ${this.theme.fg("dim", `+${hiddenRuns} more run${hiddenRuns > 1 ? "s" : ""}`)}`);
 		return lines;
 	}
 }
