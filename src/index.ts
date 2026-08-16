@@ -226,9 +226,13 @@ function taskStatsWithUsage(task: TaskSnapshot): string {
 function taskLine(task: TaskSnapshot): string {
 	return `${statusIcon(task.status)} ${task.agent} · ${taskStatsWithUsage(task)} · ${taskTimer(task)}`;
 }
-/** Numbers get the theme's number color, same as the footer's token counters. */
-function colorNums(text: string, theme: Theme): string {
-	return text.replace(/\d+(?:\.\d+)?/g, (n) => theme.fg("syntaxNumber", n));
+/**
+ * Numbers take the theme's number color, everything else stays muted — like the footer.
+ * Must run on RAW text: styling an already-colored string rewrites the digits
+ * inside the ANSI escape codes themselves ("38;2;139;136;122m16 tools").
+ */
+export function colorNums(text: string, theme: Theme): string {
+	return text.replace(/(\d+(?:\.\d+)?)|([^\d]+)/g, (_m, num?: string, rest?: string) => (num ? theme.fg("syntaxNumber", num) : theme.fg("muted", rest ?? "")));
 }
 /**
  * Themed one-liner. Finished tasks dim entirely (stats included); live tasks
@@ -239,7 +243,7 @@ function themedTaskLine(task: TaskSnapshot, theme: Theme, activity = ""): string
 	if (TERMINAL.includes(task.status)) {
 		return theme.fg("dim", `${statusIcon(task.status)} ${task.agent} · ${tail}`);
 	}
-	return `${statusIcon(task.status)} ${task.agent} · ${activity}${colorNums(theme.fg("muted", tail), theme)}`;
+	return `${statusIcon(task.status)} ${task.agent} · ${activity}${colorNums(tail, theme)}`;
 }
 /**
  * Human-readable activity line: "Read src/index.ts", "Grep wrapSingleLine".

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
 import { createPeekPane, type PeekTask } from "../src/peek.ts";
-import { describeCall } from "../src/index.ts";
+import { colorNums, describeCall } from "../src/index.ts";
 
 const theme = { fg: (_c: string, s: string) => s, bold: (s: string) => s } as any;
 
@@ -65,4 +65,11 @@ test("describeCall renders human activity lines", () => {
 	expect(describeCall("bash", { command: "ls  -la\n/tmp" })).toBe("Bash ls -la /tmp");
 	expect(describeCall("weird_tool", { count: 3 })).toBe("Weird_tool"); // no string arg → verb only
 	expect(describeCall("custom", { blob: "x".repeat(80) }).endsWith("…")).toBe(true);
+});
+
+test("colorNums never colors inside ANSI escapes", () => {
+	const theme = { fg: (c: string, s: string) => `\x1b[${c === "syntaxNumber" ? "38;2;1;2;3" : "38;2;9;9;9"}m${s}\x1b[0m` } as any;
+	const out = colorNums("16 tools · 6 turns", theme);
+	// Strip escapes: the visible text must be unchanged.
+	expect(out.replace(/\x1b\[[0-9;]*m/g, "")).toBe("16 tools · 6 turns");
 });
