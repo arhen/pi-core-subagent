@@ -55,6 +55,8 @@ interface TaskInput {
 	/** Name the leader invents for this subagent (display + mailbox addressing). */
 	agent: string;
 	task: string;
+	/** Task ids this task depends on. The edge carries the upstream output into this prompt. */
+	needs?: string[];
 	/** System prompt the leader writes for this agent. Optional — a minimal default is used. */
 	prompt?: string;
 	/** true = write toolset; false/omitted = read-only toolset. */
@@ -73,6 +75,8 @@ interface TaskSnapshot {
 	task: string;
 	cwd: string;
 	status: TaskStatus;
+	/** Resolved dependency edges (task ids). Empty/absent = wave 1. */
+	needs?: string[];
 	sessionId?: string;
 	sessionFile?: string;
 	model?: string;
@@ -241,10 +245,12 @@ export function colorNums(text: string, theme: Theme): string {
  */
 function themedTaskLine(task: TaskSnapshot, theme: Theme, activity = ""): string {
 	const tail = `${taskStatsWithUsage(task)} · ${taskTimer(task)}`;
+	// Queued task with unmet needs: show the gate it's waiting on instead of empty stats.
+	const gate = task.status === "queued" && task.needs?.length ? `${theme.fg("muted", `↳ waits ${task.needs.join(",")}`)} · ` : "";
 	if (TERMINAL.includes(task.status)) {
 		return theme.fg("dim", `${statusIcon(task.status)} ${task.agent} · ${tail}`);
 	}
-	return `${statusIcon(task.status)} ${task.agent} · ${activity}${colorNums(tail, theme)}`;
+	return `${statusIcon(task.status)} ${task.agent} · ${gate}${activity}${colorNums(tail, theme)}`;
 }
 /**
  * Human-readable activity line: "Read src/index.ts", "Grep wrapSingleLine".
@@ -339,7 +345,9 @@ function makeSummary(run: RunSnapshot): string {
 	const usage = formatUsage(run.aggregateUsage);
 	if (usage) lines.push(`Usage: ${usage}`);
 	for (const task of run.tasks) {
-		lines.push(`\n## ${task.agent} ${statusIcon(task.status)}${task.error ? `\nError: ${task.error}` : `\n${truncateText(task.finalText || "(no output)")}`}`);
+		// Edges are named so the leader can compare what it delegated against what came back.
+		const edge = task.needs?.length ? ` (${task.id}, needs ${task.needs.join(", ")})` : ` (${task.id})`;
+		lines.push(`\n## ${task.agent}${edge} ${statusIcon(task.status)}${task.error ? `\nError: ${task.error}` : `\n${truncateText(task.finalText || "(no output)")}`}`);
 	}
 	// Ceiling on the WHOLE summary — 16 tasks × 24KB would otherwise flood the parent context.
 	return truncateText(lines.join("\n"));
@@ -424,6 +432,62 @@ export function validateThinking(model: Model<Api> | undefined, level: string | 
 
 // Cached catalog removed: agents are defined inline by the leader per call,
 // so there is nothing to inject into the parent context. Zero per-request cost.
+
+/**
+ * Resolve dependency edges (Graph Protocol §2). Returns one id list per task,
+ * in input order. Chain mode is just `needs: [previous]`, so both modes run
+ * through the same wave scheduler.
+ *
+ * Throws on unknown ids, self-edges, and cycles — a bad graph must fail before
+ * any child is spawned, never halfway through a run.
+ */
+export function resolveNeeds(inputs: { id?: string; needs?: string[] }[], mode: RunMode): string[][] {
+	const ids = inputs.map((input, index) => input.id ?? `task_${index + 1}`);
+	const known = new Set(ids);
+	const edges = inputs.map((input, index) => {
+		if (mode === "chain") return index === 0 ? [] : [ids[index - 1] as string];
+		const needs = input.needs ?? [];
+		for (const need of needs) {
+			if (!known.has(need)) throw new Error(`Task ${ids[index]} needs unknown task id: ${need}`);
+			if (need === ids[index]) throw new Error(`Task ${ids[index]} cannot need itself.`);
+		}
+		return [...new Set(needs)];
+	});
+	// Kahn's algorithm: if any task never becomes ready, the remainder is a cycle.
+	const done = new Set<string>();
+	let progress = true;
+	while (progress) {
+		progress = false;
+		for (const [index, id] of ids.entries()) {
+			if (done.has(id)) continue;
+			if ((edges[index] as string[]).every((need) => done.has(need))) {
+				done.add(id);
+				progress = true;
+			}
+		}
+	}
+	if (done.size !== ids.length) {
+		throw new Error(`Cycle in subagent needs: ${ids.filter((id) => !done.has(id)).join(", ")}`);
+	}
+	return edges;
+}
+
+/**
+ * Graph Protocol §6: the edge carries the upstream output, not just ordering.
+ * Upstream results are prepended verbatim; `{previous}` stays supported so old
+ * chain prompts keep working (it expands to the first need's output).
+ */
+export function applyUpstream(task: string, needs: string[], outputs: Map<string, string>): string {
+	if (needs.length === 0) {
+		return task.includes("{previous}")
+			? `${task.replace(/\{previous\}/g, () => "")}\n\n(Note: {previous} was empty — no prior step output existed yet.)`
+			: task;
+	}
+	const first = outputs.get(needs[0] as string) ?? "";
+	const body = task.replace(/\{previous\}/g, () => first); // replacer fn: no $ corruption
+	const blocks = needs.map((need) => `## Output of ${need}\n${outputs.get(need) ?? "(no output)"}`);
+	return `${blocks.join("\n\n")}\n\n---\n\n${body}`;
+}
 
 async function mapWithConcurrency<T>(items: T[], concurrency: number, fn: (item: T, index: number) => Promise<void>): Promise<void> {
 	let next = 0;
@@ -745,6 +809,9 @@ class SubagentManager {
 		this.updateTask(run, task, {
 			status: "starting",
 			startedAt: Date.now(),
+			// Upstream outputs were spliced in by the scheduler; the snapshot must show
+			// the prompt the child actually receives.
+			task: input.task,
 			model: input.model,
 			thinking,
 			tools,
@@ -927,6 +994,7 @@ class SubagentManager {
 				ids.add(input.id);
 			}
 		}
+		const edges = resolveNeeds(inputs, mode);
 
 		const run: RunSnapshot = {
 			id: newId("run"),
@@ -944,6 +1012,7 @@ class SubagentManager {
 				task: input.task,
 				cwd: input.cwd ?? ctx.cwd,
 				status: "queued" as TaskStatus,
+				needs: edges[index],
 				model: input.model,
 				thinking: input.thinking,
 				tools: input.tools ?? (input.write ? WRITE_TOOLS : READONLY_TOOLS),
@@ -973,33 +1042,44 @@ class SubagentManager {
 		run.startedAt = Date.now();
 		this.updateRun(run, ctx, onUpdate);
 
-		if (run.mode === "chain") {
-			let previous = "";
-			for (let i = 0; i < inputs.length; i++) {
-				const task = run.tasks[i]!;
-				if (TERMINAL.includes(task.status)) continue; // canceled
-				const rawTask = inputs[i]!.task;
-				let next = rawTask.replace(/\{previous\}/g, () => previous); // replacer fn: no $ corruption
-				if (previous === "" && rawTask.includes("{previous}")) {
-					next += "\n\n(Note: {previous} was empty — no prior step output existed yet.)";
-				}
-				const input = { ...inputs[i]!, task: next };
-				task.task = input.task;
-				await this.runChild(run, task, input, ctx, signal, onUpdate);
-				if (run.notifyPerTask && run.background && TERMINAL.includes(task.status)) {
-					this.notifyTask(run, task, task.status as "completed" | "failed" | "aborted");
-				}
-				if (task.status !== "completed") break; // aborted/failed link stops the chain
-				previous = task.finalText ?? "";
-			}
-		} else {
-			await mapWithConcurrency(run.tasks, run.mode === "single" ? 1 : run.concurrency, async (task) => {
+		// One wave scheduler for every mode. A wave is the set of tasks whose needs
+		// are all satisfied; the loop boundary between waves IS the gate. Chain mode
+		// reaches here as needs: [previous], so it needs no special case.
+		const outputs = new Map<string, string>();
+		const settled = new Set<string>();
+		let remaining = run.tasks.filter((t) => !TERMINAL.includes(t.status));
+		for (const task of run.tasks) {
+			if (TERMINAL.includes(task.status)) settled.add(task.id); // canceled before start
+		}
+
+		while (remaining.length > 0) {
+			const ready = remaining.filter((t) => (t.needs ?? []).every((need) => settled.has(need)));
+			// resolveNeeds() rejects cycles up front, so an empty frontier here means every
+			// remaining task is downstream of one that never settled (canceled mid-run).
+			if (ready.length === 0) break;
+
+			await mapWithConcurrency(ready, run.mode === "single" ? 1 : run.concurrency, async (task) => {
 				const index = run.tasks.indexOf(task);
-				await this.runChild(run, task, inputs[index]!, ctx, signal, onUpdate);
+				const input = inputs[index]!;
+				const needs = task.needs ?? [];
+				// An upstream failure means this task's input never existed. Running it anyway
+				// burns a full child session on a prompt with a hole in it.
+				const broken = needs.filter((need) => !outputs.has(need));
+				if (broken.length > 0) {
+					this.updateTask(run, task, { status: "aborted", error: `Skipped: upstream task(s) did not complete: ${broken.join(", ")}`, endedAt: Date.now() }, ctx, onUpdate);
+				} else {
+					await this.runChild(run, task, { ...input, task: applyUpstream(input.task, needs, outputs) }, ctx, signal, onUpdate);
+				}
 				if (run.notifyPerTask && run.background && TERMINAL.includes(task.status)) {
 					this.notifyTask(run, task, task.status as "completed" | "failed" | "aborted");
 				}
 			});
+
+			for (const task of ready) {
+				settled.add(task.id);
+				if (task.status === "completed") outputs.set(task.id, task.finalText ?? "");
+			}
+			remaining = remaining.filter((t) => !settled.has(t.id));
 		}
 
 		const failed = run.tasks.some((t) => t.status === "failed");
@@ -1145,6 +1225,12 @@ const TaskItem = Type.Object({
 	cwd: Type.Optional(Type.String({ description: "Working directory for this task. Default: current project." })),
 	tools: Type.Optional(Type.Array(Type.String(), { description: "Explicit tool allowlist (overrides the toolset)" })),
 	maxRuntimeMs: Type.Optional(Type.Number({ description: "Per-task timeout (ms)" })),
+	needs: Type.Optional(
+		Type.Array(Type.String(), {
+			description:
+				"Task ids this task depends on (requires those tasks to declare id). It starts only after they finish, and their outputs are prepended to its prompt. Tasks with no unmet needs run together as a wave.",
+		}),
+	),
 });
 
 type SubagentParamsShape = {
@@ -1267,12 +1353,14 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool<typeof SubagentParams, RunDetails>({
 		name: "subagent",
 		label: "Subagent",
-		description: "Define and run isolated subagents (own context, own session). You invent the agent: name, optional system prompt, toolset (read-only default, write:true for edits). Modes: single, parallel (tasks), chain ({previous}). background:true fire-and-forgets with completion notice. allowIntercom:true lets children ask you questions and message each other.\n\nExamples (copy these shapes):\nSingle: subagent({ agent: \"reviewer\", prompt: \"You review code for correctness\", task: \"Review src/auth.ts\" })\nParallel: subagent({ tasks: [{ agent: \"mapper\", task: \"Map all API routes\" }, { agent: \"critic\", task: \"Review auth for vulnerabilities\" }] })\nChain: subagent({ chain: [{ agent: \"planner\", task: \"Plan the change\" }, { agent: \"doer\", write: true, task: \"Execute: {previous}\" }] })\nBackground: subagent({ agent: \"auditor\", task: \"Audit deps\", background: true })",
+		description: "Define and run isolated subagents (own context, own session). You invent the agent: name, optional system prompt, toolset (read-only default, write:true for edits). Modes: single, parallel (tasks), chain ({previous}). Tasks with `needs` form a dependency graph: each wave of tasks with satisfied needs runs in parallel, and an upstream task's output is prepended to its dependents' prompts. background:true fire-and-forgets with completion notice. allowIntercom:true lets children ask you questions and message each other.\n\nExamples (copy these shapes):\nSingle: subagent({ agent: \"reviewer\", prompt: \"You review code for correctness\", task: \"Review src/auth.ts\" })\nParallel: subagent({ tasks: [{ agent: \"mapper\", task: \"Map all API routes\" }, { agent: \"critic\", task: \"Review auth for vulnerabilities\" }] })\nGraph: subagent({ tasks: [{ id: \"api\", agent: \"api-mapper\", task: \"Map API routes\" }, { id: \"db\", agent: \"db-mapper\", task: \"Map DB schema\" }, { id: \"doc\", agent: \"writer\", needs: [\"api\", \"db\"], write: true, task: \"Write ARCHITECTURE.md. Verify: test -s ARCHITECTURE.md\" }] })\nChain: subagent({ chain: [{ agent: \"planner\", task: \"Plan the change\" }, { agent: \"doer\", write: true, task: \"Execute: {previous}\" }] })\nBackground: subagent({ agent: \"auditor\", task: \"Audit deps\", background: true })",
 		promptSnippet: "Define and delegate work to specialized subagents.",
 		promptGuidelines: [
 			"Use subagent when independent review, testing, research, or parallel analysis improves quality.",
 			"Decompose parallelizable work: if the request has 2+ independent sub-tasks (separate files, separate concerns, independent research/review), spawn N agents with a SINGLE call: subagent({ tasks: [{agent, task}, ...] }). NEVER make multiple parallel subagent calls for parallel work — one call, one run, N tasks.",
 			"If independent sub-tasks are sequential (each builds on the previous one's output), use chain mode with {previous}.",
+			"When some tasks depend on others but not all do, give tasks an `id` and list `needs`. Independent tasks then still run in parallel while dependents wait, and each dependent receives its upstream outputs automatically — do not re-describe them in the prompt.",
+			"Give every task a way to check itself: end the task text with a runnable command, e.g. 'Verify: npx tsc --noEmit && bun test'. A subagent's own claim of success is not evidence.",
 			"Define each subagent yourself: an invented name, a focused system prompt (prompt:), and a toolset — read-only (default) or write (write:true).",
 			"Prefer read-only subagents unless the task explicitly needs edits.",
 			"Use background:true for long-running work; you'll be notified on completion.",
@@ -1294,10 +1382,11 @@ export default function (pi: ExtensionAPI) {
 		},
 		renderCall(args, theme) {
 			// ponytail: args stream in partially, so mode is unknowable until JSON closes. Show "preparing…" instead of a wrong "single ?".
+			const hasEdges = args.tasks?.some((t: any) => t.needs?.length);
 			const mode = args.chain?.length
 				? `chain ${args.chain.length}`
 				: args.tasks?.length
-					? `parallel ${args.tasks.length}`
+					? `${hasEdges ? "graph" : "parallel"} ${args.tasks.length}`
 					: args.agent
 						? `single ${args.agent}`
 						: "preparing…";
