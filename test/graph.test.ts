@@ -3,7 +3,7 @@
  * Pure logic — no pi runtime needed.
  */
 import { describe, expect, test } from "bun:test";
-import { applyUpstream, resolveNeeds } from "../src/index.ts";
+import { applyUpstream, resolveNeeds, waveNotation } from "../src/index.ts";
 
 describe("resolveNeeds", () => {
 	test("parallel with no needs is one wave", () => {
@@ -106,5 +106,36 @@ describe("wave frontier", () => {
 
 	test("chain degenerates to one task per wave", () => {
 		expect(waves([{ id: "a", needs: [] }, { id: "b", needs: ["a"] }, { id: "c", needs: ["b"] }])).toEqual([["a"], ["b"], ["c"]]);
+	});
+});
+
+describe("waveNotation (§2 rendering)", () => {
+	test("flat fan-out gets no graph vocabulary", () => {
+		expect(waveNotation([{ id: "a" }, { id: "b" }])).toBe("");
+	});
+
+	test("fan-in renders waves and a gate", () => {
+		expect(waveNotation([{ id: "api" }, { id: "db" }, { id: "doc", needs: ["api", "db"] }])).toBe("wave1[api ∥ db] → gate → wave2[doc]");
+	});
+
+	test("diamond renders 3 waves", () => {
+		expect(
+			waveNotation([{ id: "audit" }, { id: "sec", needs: ["audit"] }, { id: "perf", needs: ["audit"] }, { id: "doc", needs: ["sec", "perf"] }]),
+		).toBe("wave1[audit] → gate → wave2[sec ∥ perf] → gate → wave3[doc]");
+	});
+
+	test("half-streamed args still render: unresolved tasks land in a trailing wave", () => {
+		// "doc" needs an id the model has not typed yet.
+		expect(waveNotation([{ id: "api" }, { id: "doc", needs: ["db"] }])).toBe("wave1[api] → gate → wave2[doc]");
+	});
+
+	test("long graphs collapse to counts, keeping the shape", () => {
+		const tasks = [
+			{ id: "a-very-long-agent-id-one" },
+			{ id: "a-very-long-agent-id-two" },
+			{ id: "a-very-long-agent-id-three" },
+			{ id: "downstream-with-a-long-name", needs: ["a-very-long-agent-id-one", "a-very-long-agent-id-two", "a-very-long-agent-id-three"] },
+		];
+		expect(waveNotation(tasks)).toBe("wave1[3] → gate → wave2[1]");
 	});
 });

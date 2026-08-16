@@ -473,6 +473,33 @@ export function resolveNeeds(inputs: { id?: string; needs?: string[] }[], mode: 
 }
 
 /**
+ * Graph Protocol §2 notation: `wave1[api ∥ db] → gate → wave2[doc]`.
+ *
+ * Tolerates half-streamed args: a need pointing at an id that has not arrived yet
+ * keeps its task out of the ready set, so the layout settles as the model types.
+ * Returns "" when there are no edges — flat fan-out gets no graph vocabulary.
+ */
+export function waveNotation(tasks: { id?: string; needs?: string[] }[]): string {
+	if (!tasks.some((t) => t.needs?.length)) return "";
+	const ids = tasks.map((t, i) => t.id ?? `task_${i + 1}`);
+	const settled = new Set<string>();
+	let remaining = tasks.map((t, i) => ({ id: ids[i] as string, needs: t.needs ?? [] }));
+	const waves: string[][] = [];
+	while (remaining.length > 0) {
+		const ready = remaining.filter((t) => t.needs.every((n) => settled.has(n)));
+		if (ready.length === 0) break; // cycle, or an upstream id not typed yet
+		waves.push(ready.map((t) => t.id));
+		for (const t of ready) settled.add(t.id);
+		remaining = remaining.filter((t) => !settled.has(t.id));
+	}
+	if (remaining.length > 0) waves.push(remaining.map((t) => t.id)); // show them rather than drop them
+	if (waves.length < 2) return "";
+	const full = waves.map((w, i) => `wave${i + 1}[${w.join(" ∥ ")}]`).join(" → gate → ");
+	// Long graphs: keep the shape, drop the names.
+	return full.length <= 100 ? full : waves.map((w, i) => `wave${i + 1}[${w.length}]`).join(" → gate → ");
+}
+
+/**
  * Graph Protocol §6: the edge carries the upstream output, not just ordering.
  * Upstream results are prepended verbatim; `{previous}` stays supported so old
  * chain prompts keep working (it expands to the first need's output).
@@ -1402,6 +1429,8 @@ export default function (pi: ExtensionAPI) {
 			if (args.concurrency) parts.push(`${args.concurrency} at a time`);
 			if (args.maxRuntimeMs) parts.push(`${Math.round(args.maxRuntimeMs / 60000)}m limit`);
 			const params = parts.length > 0 ? `\n  ${theme.fg("dim", parts.join(" · "))}` : "";
+			const notation = waveNotation(tasks);
+			const graphLine = notation ? `\n  ${theme.fg("muted", notation)}` : "";
 			// The plan the model actually wrote: ids, edges, toolset. Streams in as args arrive,
 			// so a graph is visible before the first child spawns.
 			const plan = tasks
@@ -1416,7 +1445,7 @@ export default function (pi: ExtensionAPI) {
 					return `\n  ${theme.fg("muted", id)} ${theme.fg("accent", t.agent ?? "…")}${mark}${edge}${what}`;
 				})
 				.join("");
-			return new Text(`${theme.fg("toolTitle", theme.bold("subagent"))} ${theme.fg("accent", mode)}${flags ? ` ${theme.fg("muted", `[${flags}]`)}` : ""}${params}${plan}`, 0, 0);
+			return new Text(`${theme.fg("toolTitle", theme.bold("subagent"))} ${theme.fg("accent", mode)}${flags ? ` ${theme.fg("muted", `[${flags}]`)}` : ""}${params}${graphLine}${plan}`, 0, 0);
 		},
 		renderResult(result, { expanded }, theme) {
 			const run = result.details?.run;

@@ -90,9 +90,18 @@ Chain — `{previous}` is replaced with the prior agent's output:
 }
 ```
 
+The call line renders the graph in §2 notation as the model types it:
+
 ```
-wave 1: api ∥ db     →  gate  →  wave 2: doc
+subagent graph 3
+  6 at a time
+  wave1[api ∥ db] → gate → wave2[doc]
+  api api-mapper Map every route in src/api/
+  db  db-mapper Map the schema in src/db/
+  doc writer ✎ ← api, db Write ARCHITECTURE.md from the maps above. Verify: test -s ARCHI…
 ```
+
+`✎` marks a write-toolset task; `←` lists its edges. With no `needs` anywhere the wave line is omitted entirely.
 
 What the edge does:
 
