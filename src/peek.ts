@@ -15,8 +15,11 @@ const TAIL_BYTES = 64 * 1024;
 const POLL_MS = 700;
 
 export interface PeekTask {
+	runId: string;
+	taskId: string;
 	agent: string;
 	status: string;
+	running: boolean;
 	sessionFile?: string;
 	line: string; // pre-rendered stats line from the caller
 }
@@ -82,9 +85,16 @@ export interface PeekPane {
  * Build the peek component. `getTasks` is polled live, so the pane keeps
  * updating while agents run.
  */
-export function createPeekPane(getTasks: () => PeekTask[], theme: Theme, requestRender: () => void, close: () => void): PeekPane {
+export function createPeekPane(
+	getTasks: () => PeekTask[],
+	theme: Theme,
+	requestRender: () => void,
+	close: () => void,
+	abort: (task: PeekTask) => void,
+): PeekPane {
 	let selected = 0;
 	let tailing = false;
+	let confirming = false;
 	const timer = setInterval(requestRender, POLL_MS);
 
 	const clamp = (n: number, len: number) => (len === 0 ? 0 : Math.max(0, Math.min(len - 1, n)));
@@ -95,7 +105,7 @@ export function createPeekPane(getTasks: () => PeekTask[], theme: Theme, request
 			selected = clamp(selected, tasks.length);
 			if (tasks.length === 0) return [theme.fg("dim", "No subagents in this session.")];
 			const task = tasks[selected]!;
-			const hint = tailing ? "esc back" : "↑↓ move · enter tail · esc close";
+			const hint = confirming ? theme.fg("error", `abort ${task.agent}? y / n`) : tailing ? "esc back · x abort" : "↑↓ move · enter tail · x abort · esc close";
 			const head = `${theme.fg("accent", theme.bold(tailing ? task.agent : "Subagents"))} ${theme.fg("dim", `(${selected + 1}/${tasks.length}) · ${hint}`)}`;
 			if (!tailing) {
 				return [head, ...tasks.map((t, i) => truncateToWidth(`${i === selected ? theme.fg("accent", "❯ ") : "  "}${t.line}`, width, "…"))];
@@ -105,8 +115,21 @@ export function createPeekPane(getTasks: () => PeekTask[], theme: Theme, request
 			return [head, ...tailLines(task.sessionFile, 18).map((l) => truncateToWidth(`  ${l}`, width, "…"))];
 		},
 		handleInput(data: string): void {
-			const len = getTasks().length;
-			if (matchesKey(data, Key.escape)) {
+			const tasks = getTasks();
+			const len = tasks.length;
+			if (confirming) {
+				// Abort is irreversible, so it always costs a second keystroke.
+				confirming = false;
+				if (data === "y" || data === "Y") {
+					const task = tasks[selected];
+					if (task) abort(task);
+				}
+				requestRender();
+				return;
+			}
+			if (data === "x" || data === "X") {
+				if (tasks[selected]?.running) confirming = true;
+			} else if (matchesKey(data, Key.escape)) {
 				if (tailing) tailing = false;
 				else close();
 			} else if (matchesKey(data, Key.enter) || matchesKey(data, Key.right)) {

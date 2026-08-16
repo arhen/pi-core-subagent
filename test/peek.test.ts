@@ -17,12 +17,13 @@ test("peek pane: navigate + tail, never mutates tasks", () => {
 		].join("\n"),
 	);
 	const tasks: PeekTask[] = [
-		{ agent: "rev-a", status: "running", sessionFile: file, line: "• rev-a · 3 tools" },
-		{ agent: "rev-b", status: "running", line: "• rev-b · 1 tools" },
+		{ runId: "r1", taskId: "t1", agent: "rev-a", status: "running", running: true, sessionFile: file, line: "• rev-a · 3 tools" },
+		{ runId: "r1", taskId: "t2", agent: "rev-b", status: "running", running: true, line: "• rev-b · 1 tools" },
 	];
 	const snapshot = JSON.stringify(tasks);
 	let closed = false;
-	const pane = createPeekPane(() => tasks, theme, () => {}, () => (closed = true));
+	const aborted: string[] = [];
+	const pane = createPeekPane(() => tasks, theme, () => {}, () => (closed = true), (t) => aborted.push(t.taskId));
 
 	expect(pane.render(80).join("\n")).toMatch(/❯ • rev-a/);
 	pane.handleInput("\x1b[B"); // down
@@ -36,6 +37,15 @@ test("peek pane: navigate + tail, never mutates tasks", () => {
 	expect(closed).toBe(false);
 	pane.handleInput("\x1b"); // esc → close
 	expect(closed).toBe(true);
+
+	// abort needs confirmation: x then n does nothing, x then y fires once
+	pane.handleInput("x");
+	expect(pane.render(80).join("\n")).toMatch(/abort rev-a\? y \/ n/);
+	pane.handleInput("n");
+	expect(aborted).toEqual([]);
+	pane.handleInput("x");
+	pane.handleInput("y");
+	expect(aborted).toEqual(["t1"]);
 	expect(JSON.stringify(tasks)).toBe(snapshot); // peek must not mutate run state
 	pane.dispose();
 });

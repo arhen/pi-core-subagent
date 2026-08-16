@@ -1027,6 +1027,22 @@ class SubagentManager {
 		return { run: cloneRun(run), background: true };
 	}
 
+	/** Abort ONE task; siblings keep running. Returns false when unknown or already finished. */
+	cancelTask(runId: string, taskId: string, ctx?: ExtensionContext): boolean {
+		const run = this.runs.get(runId);
+		const task = run?.tasks.find((t) => t.id === taskId);
+		if (!run || !task || TERMINAL.includes(task.status)) return false;
+		// Mark first: runChild's catch reads task.status to classify the outcome as aborted.
+		task.status = "aborted";
+		task.error = task.error || "Canceled from peek";
+		task.endedAt = Date.now();
+		this.liveChildren.get(`${runId}:${taskId}`)?.abort();
+		this.mailboxes.close(`${runId}:${taskId}`);
+		if (ctx) this.flushWidget(run, ctx);
+		this.emit("subagent:task-aborted", { runId, taskId });
+		return true;
+	}
+
 	cancelRun(runId: string): { aborted: number } {
 		const run = this.runs.get(runId);
 		if (!run) return { aborted: 0 };
@@ -1178,13 +1194,24 @@ export default function (pi: ExtensionAPI) {
 			manager
 				.listRuns()
 				.flatMap((run) => run.tasks)
-				.map((task) => ({ agent: task.agent, status: task.status, sessionFile: task.sessionFile, line: taskLine(task) }));
+				.map((task) => ({
+					runId: task.runId,
+					taskId: task.id,
+					agent: task.agent,
+					status: task.status,
+					running: !TERMINAL.includes(task.status),
+					sessionFile: task.sessionFile,
+					line: taskLine(task),
+				}));
 		if (getTasks().length === 0) {
 			ctx.ui.notify("No subagents in this session.", "info");
 			return;
 		}
 		await ctx.ui.custom<void>(
-			(tui, theme, _keybindings, done) => createPeekPane(getTasks, theme, () => tui.requestRender(), () => done(undefined)),
+			(tui, theme, _keybindings, done) =>
+				createPeekPane(getTasks, theme, () => tui.requestRender(), () => done(undefined), (t) => {
+					if (manager.cancelTask(t.runId, t.taskId, ctx)) ctx.ui.notify(`Aborted subagent ${t.agent}.`, "warning");
+				}),
 			{ overlay: true, overlayOptions: { anchor: "center", width: "80%", maxHeight: "70%" } },
 		);
 	};
