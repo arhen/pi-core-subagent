@@ -5,7 +5,7 @@ import { expect, test } from "bun:test";
 import { createPeekPane, type PeekTask } from "../src/peek.ts";
 import { colorNums, describeCall } from "../src/index.ts";
 
-const theme = { fg: (_c: string, s: string) => s, bold: (s: string) => s } as any;
+const theme = { fg: (_c: string, s: string) => s, bg: (_c: string, s: string) => s, bold: (s: string) => s } as any;
 
 test("peek pane: navigate + tail, never mutates tasks", () => {
 	const dir = mkdtempSync(join(tmpdir(), "peek-"));
@@ -45,7 +45,7 @@ test("peek pane: navigate + tail, never mutates tasks", () => {
 
 	// abort needs confirmation: x then n does nothing, x then y fires once
 	pane.handleInput("x");
-	expect(pane.render(80).join("\n")).toMatch(/abort rev-a\? y \/ n/);
+	expect(pane.render(80).join("\n")).toMatch(/abort rev-a\?\s+y \/ n/);
 	pane.handleInput("n");
 	expect(aborted).toEqual([]);
 	pane.handleInput("x");
@@ -76,4 +76,12 @@ test("colorNums never colors inside ANSI escapes", () => {
 	const out = colorNums("16 tools · 6 turns", theme);
 	// Strip escapes: the visible text must be unchanged.
 	expect(out.replace(/\x1b\[[0-9;]*m/g, "")).toBe("16 tools · 6 turns");
+});
+
+test("peek rows are full-width so the transcript can't bleed through", () => {
+	const t = { fg: (_c: string, s: string) => s, bg: (_c: string, s: string) => s, bold: (s: string) => s } as any;
+	const tasks: PeekTask[] = [{ runId: "r", taskId: "t", agent: "a", status: "running", running: true, line: "• a · 1 tools" }];
+	const pane = createPeekPane(() => tasks, t, () => {}, () => {}, () => {});
+	for (const line of pane.render(80)) expect(line.length).toBe(80);
+	pane.dispose();
 });

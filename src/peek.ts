@@ -1,18 +1,19 @@
 /**
  * Peek pane — quick, read-only look at what subagents are doing.
  *
- * ↑/↓ (or ←/→) move between agents, enter opens a live tail of that child's
- * session file, esc goes back / closes. Never touches run state: no abort,
- * no cancel, no writes.
+ * shift+↑/↓ (or j/k) move between agents, enter opens a live tail of that
+ * child's session file, esc goes back / closes. Never touches run state:
+ * no abort except the explicit x + y confirmation.
  */
 
 import { closeSync, openSync, readSync, statSync } from "node:fs";
-import { Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
 /** Tail window: last 64KB of the child session file is plenty for a peek. */
 const TAIL_BYTES = 64 * 1024;
 const POLL_MS = 700;
+const TAIL_ROWS = 18;
 
 export interface PeekTask {
 	runId: string;
@@ -37,8 +38,13 @@ function readTail(path: string): string {
 	}
 }
 
-/** One session-file line → one display line. Unparseable/irrelevant → null. */
-function eventLine(raw: string): string | null {
+function clip(text: string, max: number): string {
+	const flat = text.replace(/\s+/g, " ").trim();
+	return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+}
+
+/** One session-file line → one display line: [gutter, text]. Irrelevant → null. */
+function eventLine(raw: string): [string, string] | null {
 	let entry: any;
 	try {
 		entry = JSON.parse(raw);
@@ -47,25 +53,26 @@ function eventLine(raw: string): string | null {
 	}
 	const msg = entry?.message;
 	if (!msg) return null;
-	const parts: string[] = [];
+	const out: [string, string][] = [];
 	for (const block of msg.content ?? []) {
-		if (block.type === "text" && block.text?.trim()) parts.push(block.text.trim());
-		else if (block.type === "toolCall") parts.push(`→ ${block.name} ${JSON.stringify(block.arguments ?? {})}`);
-		else if (block.type === "thinking" && block.thinking?.trim()) parts.push(`(thinking) ${block.thinking.trim()}`);
+		if (block.type === "toolCall") {
+			const arg = Object.values(block.arguments ?? {}).find((v) => typeof v === "string" && v.trim() !== "") as string | undefined;
+			out.push(["→", `${block.name}${arg ? ` ${clip(arg, 120)}` : ""}`]);
+		} else if (block.type === "text" && block.text?.trim()) {
+			out.push([msg.role === "toolResult" ? "←" : "·", clip(block.text, 160)]);
+		}
 	}
-	if (parts.length === 0) return null;
-	const who = msg.role === "assistant" ? "" : msg.role === "toolResult" ? "  ← " : `${msg.role}: `;
-	return `${who}${parts.join(" ").replace(/\s+/g, " ")}`;
+	return out[0] ?? null;
 }
 
-function tailLines(path: string, max: number): string[] {
+function tailLines(path: string, max: number): [string, string][] {
 	let text: string;
 	try {
 		text = readTail(path);
 	} catch {
-		return ["(session file not readable yet)"];
+		return [["·", "(session file not readable yet)"]];
 	}
-	const lines: string[] = [];
+	const lines: [string, string][] = [];
 	// First line of a mid-file read is usually a fragment — drop it.
 	for (const raw of text.split("\n").slice(1)) {
 		const line = eventLine(raw);
@@ -99,20 +106,44 @@ export function createPeekPane(
 
 	const clamp = (n: number, len: number) => (len === 0 ? 0 : Math.max(0, Math.min(len - 1, n)));
 
+	/**
+	 * Every row is padded to the full pane width and background-filled, so the
+	 * transcript underneath never shows through the overlay.
+	 */
+	const row = (content: string, width: number): string => {
+		const inner = width - 4; // 2 cols padding each side
+		const text = truncateToWidth(content, Math.max(0, inner), "…");
+		const pad = Math.max(0, inner - visibleWidth(text));
+		return theme.bg("selectedBg", `  ${text}${" ".repeat(pad)}  `);
+	};
+
 	return {
 		render(width: number): string[] {
 			const tasks = getTasks();
 			selected = clamp(selected, tasks.length);
-			if (tasks.length === 0) return [theme.fg("dim", "No subagents in this session.")];
+			if (tasks.length === 0) return [row(theme.fg("dim", "No subagents in this session."), width)];
 			const task = tasks[selected]!;
-			const hint = confirming ? theme.fg("error", `abort ${task.agent}? y / n`) : tailing ? "esc back · x abort" : "shift+↑↓ or j/k move · enter tail · x abort · esc close";
-			const head = `${theme.fg("accent", theme.bold(tailing ? task.agent : "Subagents"))} ${theme.fg("dim", `(${selected + 1}/${tasks.length}) · ${hint}`)}`;
+			const hint = confirming
+				? theme.fg("error", `abort ${task.agent}?  y / n`)
+				: theme.fg("dim", tailing ? "esc back · x abort" : "shift+↑↓ / jk move · enter tail · x abort · esc close");
+			const title = `${theme.fg("accent", theme.bold(tailing ? task.agent : "Subagents"))} ${theme.fg("muted", `${selected + 1}/${tasks.length}`)}`;
+			const lines = [row("", width), row(title, width), row(hint, width), row("", width)];
+
 			if (!tailing) {
-				return [head, ...tasks.map((t, i) => truncateToWidth(`${i === selected ? theme.fg("accent", "❯ ") : "  "}${t.line}`, width, "…"))];
+				for (const [i, t] of tasks.entries()) {
+					const marker = i === selected ? theme.fg("accent", "❯ ") : "  ";
+					lines.push(row(`${marker}${t.line}`, width));
+				}
+			} else if (!task.sessionFile) {
+				lines.push(row(theme.fg("dim", "(no session file — agent has not started yet)"), width));
+			} else {
+				// ponytail: re-reads the tail each render (700ms poll). A watcher only pays off for files far bigger than a child session.
+				for (const [gutter, text] of tailLines(task.sessionFile, TAIL_ROWS)) {
+					lines.push(row(`${theme.fg("dim", gutter)} ${gutter === "←" ? theme.fg("dim", text) : text}`, width));
+				}
 			}
-			if (!task.sessionFile) return [head, theme.fg("dim", "(no session file — agent has not started yet)")];
-			// ponytail: re-reads the tail each render (700ms poll). A watcher only pays off for files far bigger than a child session.
-			return [head, ...tailLines(task.sessionFile, 18).map((l) => truncateToWidth(`  ${l}`, width, "…"))];
+			lines.push(row("", width));
+			return lines;
 		},
 		handleInput(data: string): void {
 			const tasks = getTasks();

@@ -1238,7 +1238,7 @@ export default function (pi: ExtensionAPI) {
 				createPeekPane(getTasks, theme, () => tui.requestRender(), () => done(undefined), (t) => {
 					if (manager.cancelTask(t.runId, t.taskId, ctx)) ctx.ui.notify(`Aborted subagent ${t.agent}.`, "warning");
 				}),
-			{ overlay: true, overlayOptions: { anchor: "center", width: "80%", maxHeight: "70%" } },
+			{ overlay: true, overlayOptions: { anchor: "center", width: "70%", minWidth: 60, maxHeight: "70%", margin: 2 } },
 		);
 	};
 	pi.registerCommand("peek", { description: "Peek at running subagents (shift+↑↓ or j/k move, enter tails)", handler: (_args, ctx) => openPeek(ctx) });
