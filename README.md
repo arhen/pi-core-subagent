@@ -26,7 +26,7 @@ pi install npm:@arhen/pi-subagent
 
 ## Usage — the leader invents the agents
 
-Define agents inline (never creates files). If a task has **no inline `prompt`**, the extension looks up an existing file by agent name — `.agents/<name>.md` or `.pi/agents/<name>.md` (nearest project dir), then `~/.pi/agent/agents/<name>.md` — and inherits its prompt + tools. Inline params always win over the file.
+Define agents inline (never creates files). If a task has **no inline `prompt`**, the extension looks up an existing file by agent name — `.agents/<name>.md` or `.pi/agents/<name>.md` (nearest project dir), then `~/.pi/agent/agents/<name>.md` — and inherits its prompt + tools. Inline params always win over the file. Model resolution: explicit `provider/model-id` (or bare id) via the pi model registry → agent-file `model` → the parent's current model → settings default.
 
 ```json
 {
@@ -84,7 +84,7 @@ Background + intercom:
 
 ### Per-task fields
 
-`agent` (name you invent, or an existing file's name — required), `task` (required), `prompt` (system prompt, optional — falls back to file lookup, then a minimal default), `write` (toolset, default read-only), plus optional `model` (`provider/model-id`), `thinking` (`off|minimal|low|medium|high|xhigh|max`), `tools` (explicit allowlist, overrides everything), `maxRuntimeMs`, `id`. Top-level only: `background`, `notifyPerTask`, `allowIntercom`, `concurrency`.
+`agent` (name you invent, or an existing file's name — required), `task` (required), `prompt` (system prompt, optional — falls back to file lookup, then a minimal default), `write` (toolset, default read-only), plus optional `model` (`provider/model-id`), `thinking` (validated enum: `off|minimal|low|medium|high|xhigh|max`), `tools` (explicit allowlist, overrides everything), `maxRuntimeMs`, `id`. Top-level only: `background`, `notifyPerTask`, `allowIntercom`, `concurrency`.
 
 ### Child talk tools (when `allowIntercom: true`)
 

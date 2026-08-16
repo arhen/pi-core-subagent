@@ -14,7 +14,7 @@
 import type { AgentSessionEvent, ExtensionAPI, ExtensionContext, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { StringEnum, type AssistantMessage } from "@earendil-works/pi-ai";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -27,6 +27,7 @@ const MAX_CONCURRENCY = 8;
 const MAX_TASKS = 16;
 const DEFAULT_RUNTIME_MS = 10 * 60 * 1000;
 const DEFAULT_STALL_MS = 90_000;
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const READONLY_TOOLS = ["read", "grep", "find", "ls"];
 const WRITE_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write"];
 const FINAL_OUTPUT_CAP = 24 * 1024;
@@ -316,11 +317,24 @@ function makeNotice(run: RunSnapshot, kind: string): string {
 function cloneRun(run: RunSnapshot): RunSnapshot {
 	return JSON.parse(JSON.stringify(run)) as RunSnapshot;
 }
-function parseModelRef(ref: string | undefined): { provider: string; modelId: string } | undefined {
-	if (!ref) return undefined;
-	const index = ref.indexOf("/");
-	if (index <= 0 || index === ref.length - 1) return undefined;
-	return { provider: ref.slice(0, index), modelId: ref.slice(index + 1) };
+/** Resolve a child model from the pi model registry.
+ *  Order: explicit "provider/model-id" or bare id (searched across available
+ *  models) → agent file model → parent's current model (ctx.model) → undefined
+ *  (createAgentSession falls back to settings). */
+function resolveChildModel(ctx: ExtensionContext, explicit: string | undefined) {
+	if (explicit?.trim()) {
+		const ref = explicit.trim();
+		const slash = ref.indexOf("/");
+		if (slash > 0 && slash < ref.length - 1) {
+			const model = ctx.modelRegistry.find(ref.slice(0, slash), ref.slice(slash + 1));
+			if (!model) throw new Error(`Model not found: ${ref}`);
+			return model;
+		}
+		const byId = ctx.modelRegistry.getAvailable().find((m) => m.id === ref);
+		if (!byId) throw new Error(`Model not found: ${ref}`);
+		return byId;
+	}
+	return ctx.model; // inherit the parent's active model
 }
 
 // Cached catalog removed: agents are defined inline by the leader per call,
@@ -556,7 +570,7 @@ class SubagentManager {
 		// (~/.agents, .pi/agents, user dir). Never creates files.
 		const fileAgent = input.prompt?.trim() ? undefined : lookupAgent(task.agent, task.cwd);
 		const prompt = input.prompt?.trim() || fileAgent?.prompt;
-		const modelRef = parseModelRef(input.model ?? fileAgent?.model);
+		const model = resolveChildModel(ctx, input.model ?? fileAgent?.model);
 		const thinking = input.thinking ?? fileAgent?.thinking;
 		const baseTools = input.tools ?? (input.write ? WRITE_TOOLS : fileAgent?.tools ?? READONLY_TOOLS);
 		const tools = [...baseTools, ...(run.allowIntercom ? CHILD_TALK_TOOLS : [])];
@@ -580,9 +594,6 @@ class SubagentManager {
 
 		const key = `${run.id}:${task.id}`;
 		try {
-			const model = modelRef ? ctx.modelRegistry.find(modelRef.provider, modelRef.modelId) : undefined;
-			if (modelRef && !model) throw new Error(`Model not found: ${modelRef.provider}/${modelRef.modelId}`);
-
 			const subagentInstruction = run.allowIntercom
 				? `You are running as a subagent. Do not call subagent/delegation tools unless the parent explicitly asks. Return a concise final answer. You MAY use ask_parent only when truly blocked on information only the parent has; notify_parent for one-way updates; send_agent_message/poll_agent_messages to coordinate with siblings. Your mailbox address and siblings: ${task.roster ?? "(none)"}. Use the exact task ids (e.g. task_2) as send_agent_message targets.`
 				: "You are running as a subagent. Do not call subagent/delegation tools unless the parent explicitly asks. Return a concise final answer for the parent agent.";
@@ -918,7 +929,7 @@ const TaskItem = Type.Object({
 	prompt: Type.Optional(Type.String({ description: "System prompt defining this agent's behavior. Optional — a minimal default is used." })),
 	write: Type.Optional(Type.Boolean({ description: "true = write toolset (read, bash, edit, write); default false = read-only (read, grep, find, ls)" })),
 	model: Type.Optional(Type.String({ description: "Model override (provider/model-id)" })),
-	thinking: Type.Optional(Type.String({ description: "Thinking level: off|minimal|low|medium|high|xhigh|max" })),
+	thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Thinking level override" })),
 	tools: Type.Optional(Type.Array(Type.String(), { description: "Explicit tool allowlist (overrides the toolset)" })),
 	maxRuntimeMs: Type.Optional(Type.Number({ description: "Per-task timeout (ms)" })),
 });
@@ -948,7 +959,7 @@ const SubagentParams = Type.Object({
 	tasks: Type.Optional(Type.Array(TaskItem, { description: "Parallel tasks" })),
 	chain: Type.Optional(Type.Array(TaskItem, { description: "Sequential tasks; {previous} = prior output" })),
 	model: Type.Optional(Type.String({ description: "Model override (single mode)" })),
-	thinking: Type.Optional(Type.String({ description: "Thinking level: off|minimal|low|medium|high|xhigh|max (single mode)" })),
+	thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Thinking level override (single mode)" })),
 	concurrency: Type.Optional(Type.Number({ description: `Parallel concurrency (default ${DEFAULT_CONCURRENCY}, max ${MAX_CONCURRENCY})` })),
 	maxRuntimeMs: Type.Optional(Type.Number({ description: `Per-task timeout, ms (default ${DEFAULT_RUNTIME_MS / 60000} min)` })),
 	background: Type.Optional(Type.Boolean({ description: "Fire-and-forget: return immediately with a runId; you'll be notified on completion" })),
