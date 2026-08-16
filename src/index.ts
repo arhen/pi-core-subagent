@@ -59,6 +59,7 @@ interface TaskInput {
 	tools?: string[];
 	model?: string;
 	thinking?: string;
+	cwd?: string;
 	maxRuntimeMs?: number;
 }
 
@@ -814,7 +815,7 @@ class SubagentManager {
 
 		const mode: RunMode = hasChain ? "chain" : hasTasks ? "parallel" : "single";
 		const inputs: TaskInput[] = hasSingle
-			? [{ agent: params.agent as string, task: params.task as string, prompt: params.prompt, write: params.write, model: params.model, thinking: params.thinking, tools: params.tools, maxRuntimeMs: params.maxRuntimeMs }]
+			? [{ agent: params.agent as string, task: params.task as string, prompt: params.prompt, write: params.write, model: params.model, thinking: params.thinking, cwd: params.cwd, tools: params.tools, maxRuntimeMs: params.maxRuntimeMs }]
 			: hasTasks
 				? params.tasks!
 				: params.chain!;
@@ -834,7 +835,7 @@ class SubagentManager {
 				runId: "",
 				agent: input.agent,
 				task: input.task,
-				cwd: ctx.cwd,
+				cwd: input.cwd ?? ctx.cwd,
 				status: "queued" as TaskStatus,
 				model: input.model,
 				thinking: input.thinking,
@@ -1013,6 +1014,7 @@ const TaskItem = Type.Object({
 	write: Type.Optional(Type.Boolean({ description: "true = write toolset (read, bash, edit, write); default false = read-only (read, grep, find, ls)" })),
 	model: Type.Optional(Type.String({ description: "Model override (provider/model-id)" })),
 	thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Thinking level override" })),
+	cwd: Type.Optional(Type.String({ description: "Working directory for this task. Default: current project." })),
 	tools: Type.Optional(Type.Array(Type.String(), { description: "Explicit tool allowlist (overrides the toolset)" })),
 	maxRuntimeMs: Type.Optional(Type.Number({ description: "Per-task timeout (ms)" })),
 });
@@ -1026,6 +1028,7 @@ type SubagentParamsShape = {
 	chain?: TaskInput[];
 	model?: string;
 	thinking?: string;
+	cwd?: string;
 	tools?: string[];
 	concurrency?: number;
 	maxRuntimeMs?: number;
@@ -1043,6 +1046,7 @@ const SubagentParams = Type.Object({
 	chain: Type.Optional(Type.Array(TaskItem, { description: "Sequential tasks; {previous} = prior output" })),
 	model: Type.Optional(Type.String({ description: "Model override (single mode)" })),
 	thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Thinking level override (single mode)" })),
+	cwd: Type.Optional(Type.String({ description: "Working directory (single mode). Default: current project." })),
 	concurrency: Type.Optional(Type.Number({ description: `Parallel concurrency (default ${DEFAULT_CONCURRENCY}, max ${MAX_CONCURRENCY})` })),
 	maxRuntimeMs: Type.Optional(Type.Number({ description: `Per-task timeout, ms (default ${DEFAULT_RUNTIME_MS / 60000} min)` })),
 	background: Type.Optional(Type.Boolean({ description: "Fire-and-forget: return immediately with a runId; you'll be notified on completion" })),
