@@ -253,8 +253,6 @@ function compactLines(run: RunSnapshot): string[] {
  *   └─ ✓ reviewer · 6 tools · 44s
  * Static icons (no animation); latest activity + tool count + runtime per agent.
  */
-const WIDGET_MAX_RUNS = 3;
-const WIDGET_MAX_TASKS_PER_RUN = 4;
 const WIDGET_MAX_LINES = 10;
 
 class SubagentsWidget implements Component {
@@ -268,38 +266,39 @@ class SubagentsWidget implements Component {
 	}
 
 	render(width: number): string[] {
-		const runs = this.getRuns();
+		// ONE flat tree: every run's tasks concatenated under a single heading.
+		// Whether the model spawned N runs or one tasks[] call, the pane reads the same.
+		const runs = this.getRuns().filter((r) => r.tasks.length > 0);
 		if (runs.length === 0) return [];
-		const lines: string[] = [];
-		let renderedRuns = 0;
-		for (const run of runs.slice(0, WIDGET_MAX_RUNS)) {
-			if (run.tasks.length === 0) continue;
-			if (lines.length > 0) lines.push("");
-			const done = run.tasks.filter((t) => TERMINAL.includes(t.status)).length;
-			const active = !TERMINAL.includes(run.status);
-			const head = active ? "accent" : "dim";
-			lines.push(truncateToWidth(`${this.theme.fg(head, active ? "●" : "○")} ${this.theme.fg(head, `Subagents (${done}/${run.tasks.length})`)}`, width, "…"));
+		const total = runs.reduce((n, r) => n + r.tasks.length, 0);
+		const done = runs.reduce((n, r) => n + r.tasks.filter((t) => TERMINAL.includes(t.status)).length, 0);
+		const live = total - done;
+		const head = live > 0 ? "accent" : "dim";
+		const lines = [truncateToWidth(`${this.theme.fg(head, live > 0 ? "●" : "○")} ${this.theme.fg(head, `Subagents (${done}/${total})`)}`, width, "…")];
+		const budget = WIDGET_MAX_LINES - 1;
+		let shown = 0;
+		outer: for (const run of runs) {
 			const allDone = TERMINAL.includes(run.status);
-			const visible = run.tasks.slice(0, WIDGET_MAX_TASKS_PER_RUN);
-			visible.forEach((task, i) => {
-				const last = i === visible.length - 1 && run.tasks.length <= WIDGET_MAX_TASKS_PER_RUN;
-				const conn = this.theme.fg("dim", last ? "└─" : "├─");
+			for (const task of run.tasks) {
+				if (shown >= budget) break outer;
+				shown += 1;
 				const activity =
 					!TERMINAL.includes(task.status) && task.lastActivity
 						? `${this.theme.fg("dim", `→ ${task.lastActivity}`)} · `
 						: "";
-				// Finished run: dim everything except the agent name.
+				// Tasks of a finished run: dim everything except the agent name.
 				const line = allDone
 					? `${this.theme.fg("dim", `${statusIcon(task.status)} `)}${task.agent} ${this.theme.fg("dim", `· ${taskStatsWithUsage(task)} · ${taskTimer(task)}`)}`
 					: `${statusIcon(task.status)} ${task.agent} · ${activity}${taskStatsWithUsage(task)} · ${taskTimer(task)}`;
-				lines.push(truncateToWidth(`${conn} ${line}`, width, "…"));
-			});
-			if (run.tasks.length > WIDGET_MAX_TASKS_PER_RUN) lines.push(`${this.theme.fg("dim", "└─")} ${this.theme.fg("dim", `+${run.tasks.length - WIDGET_MAX_TASKS_PER_RUN} more tasks`)}`);
-			renderedRuns += 1;
-			if (lines.length >= WIDGET_MAX_LINES) break; // keep the editor visible
+				lines.push(truncateToWidth(`${this.theme.fg("dim", "├─")} ${line}`, width, "…"));
+			}
 		}
-		const hiddenRuns = runs.length - renderedRuns;
-		if (hiddenRuns > 0) lines.push(`${this.theme.fg("dim", "└─")} ${this.theme.fg("dim", `+${hiddenRuns} more run${hiddenRuns > 1 ? "s" : ""}`)}`);
+		const hidden = total - shown;
+		if (hidden > 0) {
+			lines.push(`${this.theme.fg("dim", "└─")} ${this.theme.fg("dim", `+${hidden} more`)}`);
+		} else if (lines.length > 1) {
+			lines[lines.length - 1] = lines[lines.length - 1]!.replace("├─", "└─");
+		}
 		return lines;
 	}
 }
@@ -1164,7 +1163,7 @@ export default function (pi: ExtensionAPI) {
 		promptSnippet: "Define and delegate work to specialized subagents.",
 		promptGuidelines: [
 			"Use subagent when independent review, testing, research, or parallel analysis improves quality.",
-			"Decompose parallelizable work: if the request has 2+ independent sub-tasks (separate files, separate concerns, independent research/review), delegate each to its own subagent — in ONE call with tasks[] (single shot), not multiple parallel subagent calls.",
+			"Decompose parallelizable work: if the request has 2+ independent sub-tasks (separate files, separate concerns, independent research/review), spawn N agents with a SINGLE call: subagent({ tasks: [{agent, task}, ...] }). NEVER make multiple parallel subagent calls for parallel work — one call, one run, N tasks.",
 			"If independent sub-tasks are sequential (each builds on the previous one's output), use chain mode with {previous}.",
 			"Define each subagent yourself: an invented name, a focused system prompt (prompt:), and a toolset — read-only (default) or write (write:true).",
 			"Prefer read-only subagents unless the task explicitly needs edits.",
