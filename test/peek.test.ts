@@ -49,3 +49,10 @@ test("peek pane: navigate + tail, never mutates tasks", () => {
 	expect(JSON.stringify(tasks)).toBe(snapshot); // peek must not mutate run state
 	pane.dispose();
 });
+
+test("no default runtime cap; explicit maxRuntimeMs still honored", () => {
+	// DEFAULT_RUNTIME_MS = 0 means "no timer armed"; any positive value arms one.
+	const src = require("node:fs").readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
+	expect(src).toMatch(/const DEFAULT_RUNTIME_MS = 0;/);
+	expect(src).toMatch(/if \(maxRuntimeMs > 0\)/);
+});

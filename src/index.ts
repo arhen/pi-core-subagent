@@ -991,13 +991,10 @@ class SubagentManager {
 		run.status = aborted ? "aborted" : failed ? "failed" : "completed";
 		run.endedAt = Date.now();
 		this.flushWidget(run, ctx, onUpdate);
-		// Run done: keep the widget only while another run is still live.
+		// Finished runs (including aborted ones) stay on screen so the outcome is readable.
+		// The agent_start handler clears them on the next turn that spawns nothing.
 		const live = this.listRuns().find((r) => !TERMINAL.includes(r.status));
-		if (live) {
-			this.scheduleWidget(live, ctx, onUpdate);
-		} else {
-			this.clearWidget(ctx);
-		}
+		if (live) this.scheduleWidget(live, ctx, onUpdate);
 		// L7: cancelRun already emitted + settled — don't double-report.
 		if (this.settlers.has(run.id)) {
 			this.emit("subagent:run-completed", { runId: run.id, status: run.status, run: cloneRun(run), aggregateUsage: run.aggregateUsage });
