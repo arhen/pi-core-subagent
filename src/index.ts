@@ -253,7 +253,7 @@ function compactLines(run: RunSnapshot): string[] {
  */
 class SubagentsWidget implements Component {
 	constructor(
-		private readonly getRun: () => RunSnapshot | undefined,
+		private readonly getRuns: () => RunSnapshot[],
 		private readonly theme: Theme,
 	) {}
 
@@ -262,28 +262,33 @@ class SubagentsWidget implements Component {
 	}
 
 	render(width: number): string[] {
-		const run = this.getRun();
-		if (!run || run.tasks.length === 0) return [];
-		const done = run.tasks.filter((t) => TERMINAL.includes(t.status)).length;
-		const active = !TERMINAL.includes(run.status);
-		const head = active ? "accent" : "dim";
-		const lines = [truncateToWidth(`${this.theme.fg(head, active ? "●" : "○")} ${this.theme.fg(head, `Subagents (${done}/${run.tasks.length})`)}`, width, "…")];
-		const allDone = TERMINAL.includes(run.status);
-		const visible = run.tasks.slice(0, MAX_TASKS);
-		visible.forEach((task, i) => {
-			const last = i === visible.length - 1 && run.tasks.length <= MAX_TASKS;
-			const conn = this.theme.fg("dim", last ? "└─" : "├─");
-			const activity =
-				!TERMINAL.includes(task.status) && task.lastActivity
-					? `${this.theme.fg("dim", `→ ${task.lastActivity}`)} · `
-					: "";
-			// Completed run: dim everything except the agent name.
-			const line = allDone
-				? `${this.theme.fg("dim", `${statusIcon(task.status)} `)}${task.agent} ${this.theme.fg("dim", `· ${taskStatsWithUsage(task)} · ${taskTimer(task)}`)}`
-				: `${statusIcon(task.status)} ${task.agent} · ${activity}${taskStatsWithUsage(task)} · ${taskTimer(task)}`;
-			lines.push(truncateToWidth(`${conn} ${line}`, width, "…"));
+		const runs = this.getRuns();
+		if (runs.length === 0) return [];
+		const lines: string[] = [];
+		runs.forEach((run, ri) => {
+			if (run.tasks.length === 0) return;
+			if (ri > 0) lines.push("");
+			const done = run.tasks.filter((t) => TERMINAL.includes(t.status)).length;
+			const active = !TERMINAL.includes(run.status);
+			const head = active ? "accent" : "dim";
+			lines.push(truncateToWidth(`${this.theme.fg(head, active ? "●" : "○")} ${this.theme.fg(head, `Subagents (${done}/${run.tasks.length})`)}`, width, "…"));
+			const allDone = TERMINAL.includes(run.status);
+			const visible = run.tasks.slice(0, MAX_TASKS);
+			visible.forEach((task, i) => {
+				const last = i === visible.length - 1 && run.tasks.length <= MAX_TASKS;
+				const conn = this.theme.fg("dim", last ? "└─" : "├─");
+				const activity =
+					!TERMINAL.includes(task.status) && task.lastActivity
+						? `${this.theme.fg("dim", `→ ${task.lastActivity}`)} · `
+						: "";
+				// Finished run: dim everything except the agent name.
+				const line = allDone
+					? `${this.theme.fg("dim", `${statusIcon(task.status)} `)}${task.agent} ${this.theme.fg("dim", `· ${taskStatsWithUsage(task)} · ${taskTimer(task)}`)}`
+					: `${statusIcon(task.status)} ${task.agent} · ${activity}${taskStatsWithUsage(task)} · ${taskTimer(task)}`;
+				lines.push(truncateToWidth(`${conn} ${line}`, width, "…"));
+			});
+			if (run.tasks.length > MAX_TASKS) lines.push(`${this.theme.fg("dim", "└─")} ${this.theme.fg("dim", `+${run.tasks.length - MAX_TASKS} more`)}`);
 		});
-		if (run.tasks.length > MAX_TASKS) lines.push(`${this.theme.fg("dim", "└─")} ${this.theme.fg("dim", `+${run.tasks.length - MAX_TASKS} more`)}`);
 		return lines;
 	}
 }
