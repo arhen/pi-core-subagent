@@ -21,6 +21,7 @@ import { Type } from "typebox";
 import { join } from "node:path";
 import { CHILD_TALK_TOOLS, createChildTools, createWatchdog, type ChildHandlers } from "./child.ts";
 import { createMailbox, type Mailbox } from "./mailbox.ts";
+import { createPeekPane, type PeekTask } from "./peek.ts";
 
 const DEFAULT_CONCURRENCY = 3;
 const MAX_CONCURRENCY = 8;
@@ -1169,6 +1170,26 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.notify(runs.flatMap((run) => compactLines(run).concat("")).join("\n") || "No subagent runs in this session.", "info");
 		},
 	});
+
+	/** Read-only peek: browse agents, enter to tail one. Never mutates run state. */
+	const openPeek = async (ctx: ExtensionContext) => {
+		if (!ctx.hasUI) return;
+		const getTasks = (): PeekTask[] =>
+			manager
+				.listRuns()
+				.flatMap((run) => run.tasks)
+				.map((task) => ({ agent: task.agent, status: task.status, sessionFile: task.sessionFile, line: taskLine(task) }));
+		if (getTasks().length === 0) {
+			ctx.ui.notify("No subagents in this session.", "info");
+			return;
+		}
+		await ctx.ui.custom<void>(
+			(tui, theme, _keybindings, done) => createPeekPane(getTasks, theme, () => tui.requestRender(), () => done(undefined)),
+			{ overlay: true, overlayOptions: { anchor: "center", width: "80%", maxHeight: "70%" } },
+		);
+	};
+	pi.registerCommand("peek", { description: "Peek at running subagents (↑↓ move, enter tails)", handler: (_args, ctx) => openPeek(ctx) });
+	pi.registerShortcut("ctrl+shift+s", { description: "Peek at running subagents", handler: openPeek });
 
 	pi.on("agent_start", (_event, ctx) => {
 		if (!manager.turnActivity && !manager.hasActiveRun()) manager.clearWidget(ctx);
