@@ -1,9 +1,9 @@
+import { expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, test } from "bun:test";
+import { colorNums, describeCall } from "../src/format.ts";
 import { createPeekPane, type PeekTask } from "../src/peek.ts";
-import { colorNums, describeCall } from "../src/index.ts";
 
 const theme = { fg: (_c: string, s: string) => s, bg: (_c: string, s: string) => s, bold: (s: string) => s } as any;
 
@@ -14,17 +14,33 @@ test("peek pane: navigate + tail, never mutates tasks", () => {
 		file,
 		[
 			JSON.stringify({ message: { role: "user", content: [{ type: "text", text: "do the thing" }] } }),
-			JSON.stringify({ message: { role: "assistant", content: [{ type: "toolCall", name: "read", arguments: { path: "a.ts" } }] } }),
+			JSON.stringify({
+				message: { role: "assistant", content: [{ type: "toolCall", name: "read", arguments: { path: "a.ts" } }] },
+			}),
 		].join("\n"),
 	);
 	const tasks: PeekTask[] = [
-		{ runId: "r1", taskId: "t1", agent: "rev-a", status: "running", running: true, sessionFile: file, line: "• rev-a · 3 tools" },
+		{
+			runId: "r1",
+			taskId: "t1",
+			agent: "rev-a",
+			status: "running",
+			running: true,
+			sessionFile: file,
+			line: "• rev-a · 3 tools",
+		},
 		{ runId: "r1", taskId: "t2", agent: "rev-b", status: "running", running: true, line: "• rev-b · 1 tools" },
 	];
 	const snapshot = JSON.stringify(tasks);
 	let closed = false;
 	const aborted: string[] = [];
-	const pane = createPeekPane(() => tasks, theme, () => {}, () => (closed = true), (t) => aborted.push(t.taskId));
+	const pane = createPeekPane(
+		() => tasks,
+		theme,
+		() => {},
+		() => (closed = true),
+		(t) => aborted.push(t.taskId),
+	);
 
 	expect(pane.render(80).join("\n")).toMatch(/❯ • rev-a/);
 	pane.handleInput("\x1b[B"); // down
@@ -57,7 +73,7 @@ test("peek pane: navigate + tail, never mutates tasks", () => {
 
 test("no default runtime cap; explicit maxRuntimeMs still honored", () => {
 	// DEFAULT_RUNTIME_MS = 0 means "no timer armed"; any positive value arms one.
-	const src = require("node:fs").readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
+	const src = require("node:fs").readFileSync(new URL("../src/manager.ts", import.meta.url), "utf8");
 	expect(src).toMatch(/const DEFAULT_RUNTIME_MS = 0;/);
 	expect(src).toMatch(/if \(maxRuntimeMs > 0\)/);
 });
@@ -72,7 +88,9 @@ test("describeCall renders human activity lines", () => {
 });
 
 test("colorNums never colors inside ANSI escapes", () => {
-	const theme = { fg: (c: string, s: string) => `\x1b[${c === "syntaxNumber" ? "38;2;1;2;3" : "38;2;9;9;9"}m${s}\x1b[0m` } as any;
+	const theme = {
+		fg: (c: string, s: string) => `\x1b[${c === "syntaxNumber" ? "38;2;1;2;3" : "38;2;9;9;9"}m${s}\x1b[0m`,
+	} as any;
 	const out = colorNums("16 tools · ↑ 460.6k · running 2m30s", theme);
 	// Value + unit is one token: "460.6k" and "2m30s" must not be split mid-number.
 	expect(out).toContain("38;2;1;2;3m460.6k\x1b[0m");
@@ -83,8 +101,16 @@ test("colorNums never colors inside ANSI escapes", () => {
 
 test("peek rows are full-width so the transcript can't bleed through", () => {
 	const t = { fg: (_c: string, s: string) => s, bg: (_c: string, s: string) => s, bold: (s: string) => s } as any;
-	const tasks: PeekTask[] = [{ runId: "r", taskId: "t", agent: "a", status: "running", running: true, line: "• a · 1 tools" }];
-	const pane = createPeekPane(() => tasks, t, () => {}, () => {}, () => {});
+	const tasks: PeekTask[] = [
+		{ runId: "r", taskId: "t", agent: "a", status: "running", running: true, line: "• a · 1 tools" },
+	];
+	const pane = createPeekPane(
+		() => tasks,
+		t,
+		() => {},
+		() => {},
+		() => {},
+	);
 	for (const line of pane.render(80)) expect(line.length).toBe(80);
 	pane.dispose();
 });

@@ -7,8 +7,8 @@
  */
 
 import { closeSync, openSync, readSync, statSync } from "node:fs";
-import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 /** Tail window: last 64KB of the child session file is plenty for a peek. */
 const TAIL_BYTES = 64 * 1024;
@@ -56,7 +56,9 @@ function eventLine(raw: string): [string, string] | null {
 	const out: [string, string][] = [];
 	for (const block of msg.content ?? []) {
 		if (block.type === "toolCall") {
-			const arg = Object.values(block.arguments ?? {}).find((v) => typeof v === "string" && v.trim() !== "") as string | undefined;
+			const arg = Object.values(block.arguments ?? {}).find((v) => typeof v === "string" && v.trim() !== "") as
+				| string
+				| undefined;
 			out.push(["→", `${block.name}${arg ? ` ${clip(arg, 120)}` : ""}`]);
 		} else if (block.type === "text" && block.text?.trim()) {
 			out.push([msg.role === "toolResult" ? "←" : "·", clip(block.text, 160)]);

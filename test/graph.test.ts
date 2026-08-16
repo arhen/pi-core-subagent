@@ -3,7 +3,7 @@
  * Pure logic — no pi runtime needed.
  */
 import { describe, expect, test } from "bun:test";
-import { applyUpstream, resolveNeeds, waveNotation } from "../src/index.ts";
+import { applyUpstream, resolveNeeds, runWaveScheduler, waveNotation } from "../src/graph.ts";
 
 describe("resolveNeeds", () => {
 	test("parallel with no needs is one wave", () => {
@@ -23,7 +23,10 @@ describe("resolveNeeds", () => {
 	});
 
 	test("diamond resolves", () => {
-		const edges = resolveNeeds([{ id: "a" }, { id: "b", needs: ["a"] }, { id: "c", needs: ["a"] }, { id: "d", needs: ["b", "c"] }], "parallel");
+		const edges = resolveNeeds(
+			[{ id: "a" }, { id: "b", needs: ["a"] }, { id: "c", needs: ["a"] }, { id: "d", needs: ["b", "c"] }],
+			"parallel",
+		);
 		expect(edges).toEqual([[], ["a"], ["a"], ["b", "c"]]);
 	});
 
@@ -36,7 +39,15 @@ describe("resolveNeeds", () => {
 	});
 
 	test("cycle rejected before anything spawns", () => {
-		expect(() => resolveNeeds([{ id: "a", needs: ["b"] }, { id: "b", needs: ["a"] }], "parallel")).toThrow(/Cycle in subagent needs/);
+		expect(() =>
+			resolveNeeds(
+				[
+					{ id: "a", needs: ["b"] },
+					{ id: "b", needs: ["a"] },
+				],
+				"parallel",
+			),
+		).toThrow(/Cycle in subagent needs/);
 	});
 });
 
@@ -53,7 +64,14 @@ describe("applyUpstream", () => {
 	});
 
 	test("multiple upstreams each get a block", () => {
-		const out = applyUpstream("merge", ["a", "b"], new Map([["a", "A"], ["b", "B"]]));
+		const out = applyUpstream(
+			"merge",
+			["a", "b"],
+			new Map([
+				["a", "A"],
+				["b", "B"],
+			]),
+		);
 		expect(out).toContain("## Output of a");
 		expect(out).toContain("## Output of b");
 	});
@@ -73,39 +91,116 @@ describe("applyUpstream", () => {
 	});
 });
 
-describe("wave frontier", () => {
-	/** Mirrors executeTasks: ready = every need settled. */
-	function waves(tasks: { id: string; needs: string[] }[]): string[][] {
+describe("wave frontier (real scheduler)", () => {
+	async function execute(
+		tasks: { id: string; needs: string[] }[],
+		opts: { concurrency?: number; fail?: string[] } = {},
+	): Promise<string[]> {
+		const outputs = new Map<string, string>();
 		const settled = new Set<string>();
-		let remaining = [...tasks];
-		const out: string[][] = [];
-		while (remaining.length > 0) {
-			const ready = remaining.filter((t) => t.needs.every((n) => settled.has(n)));
-			if (ready.length === 0) break;
-			out.push(ready.map((t) => t.id));
-			for (const t of ready) settled.add(t.id);
-			remaining = remaining.filter((t) => !settled.has(t.id));
-		}
-		return out;
+		const order: string[] = [];
+		await runWaveScheduler(tasks, opts.concurrency ?? 3, outputs, settled, async (task) => {
+			order.push(task.id);
+			if (opts.fail?.includes(task.id)) return; // upstream "failed": no output recorded
+			outputs.set(task.id, `out-${task.id}`);
+		});
+		return order;
 	}
 
-	test("independent tasks form a single wave", () => {
-		expect(waves([{ id: "a", needs: [] }, { id: "b", needs: [] }])).toEqual([["a", "b"]]);
+	test("independent tasks form a single wave", async () => {
+		expect(
+			await execute([
+				{ id: "a", needs: [] },
+				{ id: "b", needs: [] },
+			]),
+		).toEqual(["a", "b"]);
 	});
 
-	test("diamond runs as 3 waves with b,c parallel", () => {
+	test("diamond runs as 3 waves with b,c parallel", async () => {
 		expect(
-			waves([
+			await execute([
 				{ id: "a", needs: [] },
 				{ id: "b", needs: ["a"] },
 				{ id: "c", needs: ["a"] },
 				{ id: "d", needs: ["b", "c"] },
 			]),
-		).toEqual([["a"], ["b", "c"], ["d"]]);
+		).toEqual(["a", "b", "c", "d"]);
 	});
 
-	test("chain degenerates to one task per wave", () => {
-		expect(waves([{ id: "a", needs: [] }, { id: "b", needs: ["a"] }, { id: "c", needs: ["b"] }])).toEqual([["a"], ["b"], ["c"]]);
+	test("chain degenerates to one task per wave", async () => {
+		expect(
+			await execute([
+				{ id: "a", needs: [] },
+				{ id: "b", needs: ["a"] },
+				{ id: "c", needs: ["b"] },
+			]),
+		).toEqual(["a", "b", "c"]);
+	});
+
+	test("concurrency bounds the wave width", async () => {
+		let active = 0;
+		let maxActive = 0;
+		await runWaveScheduler(
+			[
+				{ id: "a", needs: [] },
+				{ id: "b", needs: [] },
+				{ id: "c", needs: [] },
+				{ id: "d", needs: [] },
+			],
+			2,
+			new Map(),
+			new Set(),
+			async (task) => {
+				active++;
+				maxActive = Math.max(maxActive, active);
+				await new Promise((r) => setTimeout(r, 5));
+				active--;
+			},
+		);
+		expect(maxActive).toBeLessThanOrEqual(2);
+	});
+
+	test("broken upstream skips the dependent, not the whole run", async () => {
+		const outputs = new Map<string, string>();
+		const settled = new Set<string>();
+		const ran: string[] = [];
+		const { skipped } = await runWaveScheduler(
+			[
+				{ id: "a", needs: [] },
+				{ id: "b", needs: ["a"] },
+				{ id: "c", needs: ["a"] },
+				{ id: "d", needs: ["b", "c"] },
+			],
+			3,
+			outputs,
+			settled,
+			async (task) => {
+				ran.push(task.id);
+				// a produces no output → everything downstream of it is broken
+				if (task.id !== "a") outputs.set(task.id, "x");
+			},
+		);
+		expect(ran).toEqual(["a"]);
+		expect(skipped.map((s) => s.id).sort()).toEqual(["b", "c", "d"]);
+		expect(skipped.find((s) => s.id === "b")?.needs).toEqual(["a"]);
+	});
+
+	test("canceled upstream (settled, no output) skips the dependent without running it", async () => {
+		const outputs = new Map<string, string>();
+		const settled = new Set<string>(["a"]); // a canceled before start
+		const ran: string[] = [];
+		const { skipped } = await runWaveScheduler(
+			[{ id: "b", needs: ["a"] }], // caller filters pre-settled tasks out, like executeTasks does
+			3,
+			outputs,
+			settled,
+			async (task) => {
+				ran.push(task.id);
+				outputs.set(task.id, "x");
+			},
+		);
+		expect(ran).toEqual([]);
+		expect(skipped.map((s) => s.id)).toEqual(["b"]);
 	});
 });
 
@@ -115,12 +210,19 @@ describe("waveNotation (§2 rendering)", () => {
 	});
 
 	test("fan-in renders waves and a gate", () => {
-		expect(waveNotation([{ id: "api" }, { id: "db" }, { id: "doc", needs: ["api", "db"] }])).toBe("wave1[api ∥ db] → gate → wave2[doc]");
+		expect(waveNotation([{ id: "api" }, { id: "db" }, { id: "doc", needs: ["api", "db"] }])).toBe(
+			"wave1[api ∥ db] → gate → wave2[doc]",
+		);
 	});
 
 	test("diamond renders 3 waves", () => {
 		expect(
-			waveNotation([{ id: "audit" }, { id: "sec", needs: ["audit"] }, { id: "perf", needs: ["audit"] }, { id: "doc", needs: ["sec", "perf"] }]),
+			waveNotation([
+				{ id: "audit" },
+				{ id: "sec", needs: ["audit"] },
+				{ id: "perf", needs: ["audit"] },
+				{ id: "doc", needs: ["sec", "perf"] },
+			]),
 		).toBe("wave1[audit] → gate → wave2[sec ∥ perf] → gate → wave3[doc]");
 	});
 
@@ -134,7 +236,10 @@ describe("waveNotation (§2 rendering)", () => {
 			{ id: "a-very-long-agent-id-one" },
 			{ id: "a-very-long-agent-id-two" },
 			{ id: "a-very-long-agent-id-three" },
-			{ id: "downstream-with-a-long-name", needs: ["a-very-long-agent-id-one", "a-very-long-agent-id-two", "a-very-long-agent-id-three"] },
+			{
+				id: "downstream-with-a-long-name",
+				needs: ["a-very-long-agent-id-one", "a-very-long-agent-id-two", "a-very-long-agent-id-three"],
+			},
 		];
 		expect(waveNotation(tasks)).toBe("wave1[3] → gate → wave2[1]");
 	});

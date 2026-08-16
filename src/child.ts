@@ -14,14 +14,8 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import type { MailboxMessage } from "./mailbox.ts";
 
-export interface MailboxMessage {
-	from: string;
-	text: string;
-	at: number;
-}
-
-/** Child talk tools injected when allowIntercom: true. */
 export const CHILD_TALK_TOOLS = ["ask_parent", "notify_parent", "send_agent_message", "poll_agent_messages"] as const;
 
 export interface ChildHandlers {
@@ -57,7 +51,8 @@ export function createChildTools(taskId: string, handlers: ChildHandlers): ToolD
 		{
 			name: "notify_parent",
 			label: "Notify Parent",
-			description: "Send a non-blocking message to the parent agent (a finding, a risk, a heads-up). Your run continues immediately; the parent sees it on its next turn.",
+			description:
+				"Send a non-blocking message to the parent agent (a finding, a risk, a heads-up). Your run continues immediately; the parent sees it on its next turn.",
 			promptSnippet: "Send the parent a non-blocking update or finding.",
 			parameters: Type.Object({
 				message: Type.String({ description: "The message content for the parent" }),
@@ -76,13 +71,21 @@ export function createChildTools(taskId: string, handlers: ChildHandlers): ToolD
 				"Send a non-blocking message to another subagent in this run (delivered to its mailbox; it will see it via poll_agent_messages). Use 'leader' to message the parent instead. Messages are small and bounded — no long transcripts.",
 			promptSnippet: "Send a short message to a sibling subagent or the leader.",
 			parameters: Type.Object({
-				to: Type.String({ description: "Target task id of another subagent in this run (e.g. task_2), or 'leader' for the parent agent" }),
+				to: Type.String({
+					description: "Target task id of another subagent in this run (e.g. task_2), or 'leader' for the parent agent",
+				}),
 				message: Type.String({ description: "Short message content (keep under ~500 chars)" }),
 			}),
 			async execute(_toolCallId, params) {
 				const { to, message } = params as { to: string; message: string };
 				if (!handlers.onSendMessage(taskId, to, message)) {
-					return { content: [{ type: "text" as const, text: `Unknown target '${to}'. Use a sibling task id in this run or 'leader'.` }], isError: true, details: {} };
+					return {
+						content: [
+							{ type: "text" as const, text: `Unknown target '${to}'. Use a sibling task id in this run or 'leader'.` },
+						],
+						isError: true,
+						details: {},
+					};
 				}
 				return { content: [{ type: "text" as const, text: "Sent." }], details: {} };
 			},
@@ -90,15 +93,14 @@ export function createChildTools(taskId: string, handlers: ChildHandlers): ToolD
 		{
 			name: "poll_agent_messages",
 			label: "Poll Agent Messages",
-			description: "Check your mailbox for messages from sibling subagents. Returns and clears all pending messages. Call it before acting on assumptions about other agents' results.",
+			description:
+				"Check your mailbox for messages from sibling subagents. Returns and clears all pending messages. Call it before acting on assumptions about other agents' results.",
 			promptSnippet: "Check for messages from other subagents.",
 			parameters: Type.Object({}),
 			async execute() {
 				const messages = handlers.onPollMailbox(taskId);
 				if (messages.length === 0) return { content: [{ type: "text" as const, text: "No messages." }], details: {} };
-				const body = messages
-					.map((m) => `from ${m.from}: ${m.text}`)
-					.join("\n");
+				const body = messages.map((m) => `from ${m.from}: ${m.text}`).join("\n");
 				const capped = body.length > 4000 ? body.slice(0, 4000).replace(/[\uD800-\uDBFF]$/, "") : body; // multibyte-safe
 				return { content: [{ type: "text" as const, text: capped }], details: { messages } };
 			},

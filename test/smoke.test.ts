@@ -3,9 +3,9 @@
  * Pure logic only — no pi runtime needed. Run: bun test
  */
 import { describe, expect, test } from "bun:test";
-import { classifyFailure, resolveChildModel, validateThinking } from "../src/index.ts";
 import { createChildTools, createWatchdog } from "../src/child.ts";
 import { createMailbox } from "../src/mailbox.ts";
+import { classifyFailure, resolveChildModel, validateThinking } from "../src/manager.ts";
 
 describe("classifyFailure", () => {
 	test("stop/end/undefined → no failure (normal completion)", () => {
@@ -86,10 +86,28 @@ describe("watchdog", () => {
 		wd.dispose();
 		expect(wd).toBeTruthy();
 	});
+
+	test("rejects after stall when untouched; touch keeps it alive", async () => {
+		const wd = createWatchdog(40, "test");
+		wd.touch();
+		// interval floor is 1s, so detection takes >= ~1s even for tiny stallMs
+		const t0 = Date.now();
+		const err = await wd.promise.catch((e: unknown) => e);
+		expect(err).toBeInstanceOf(Error);
+		expect((err as Error).message).toMatch(/stalled/);
+		expect(Date.now() - t0).toBeGreaterThanOrEqual(900);
+		wd.dispose();
+	});
 });
 
 describe("validateThinking", () => {
-	const reasoningModel = { id: "m", name: "m", provider: "p", reasoning: true, thinkingLevelMap: { low: null, high: "high", max: "max" } } as never;
+	const reasoningModel = {
+		id: "m",
+		name: "m",
+		provider: "p",
+		reasoning: true,
+		thinkingLevelMap: { low: null, high: "high", max: "max" },
+	} as never;
 	const noReasoningModel = { id: "m", name: "m", provider: "p", reasoning: false } as never;
 	const noMapModel = { id: "m", name: "m", provider: "p", reasoning: true } as never;
 
@@ -130,7 +148,11 @@ describe("resolveChildModel", () => {
 		model: { provider: "parent", id: "inherited" },
 		modelRegistry: {
 			getAvailable: () => models,
-			find: (p: string, id: string) => models.find((m: never) => (m as never as { provider: string; id: string }).provider === p && (m as never as { id: string }).id === id),
+			find: (p: string, id: string) =>
+				models.find(
+					(m: never) =>
+						(m as never as { provider: string; id: string }).provider === p && (m as never as { id: string }).id === id,
+				),
 		},
 	} as never as Parameters<typeof resolveChildModel>[0];
 
