@@ -86,13 +86,13 @@ export function themedTaskLine(task: TaskSnapshot, theme: Theme, activity = ""):
 	const tail = `${taskStatsWithUsage(task)} · ${taskTimer(task)}`;
 	// Queued task with unmet needs: show the gate it's waiting on instead of empty stats.
 	const gate =
-		task.status === "queued" && task.needs?.length ? `${theme.fg("muted", `↳ waits ${task.needs.join(",")}`)} · ` : "";
+		task.status === "queued" && task.needs?.length ? `${theme.fg("muted", `↳ waits ${task.needs.join(", ")}`)} · ` : "";
 	if (TERMINAL.includes(task.status)) {
 		return theme.fg("dim", `${statusIcon(task.status)} ${task.agent} · ${tail}`);
 	}
 	// Talking (mailbox/intercom tool in flight): pulse the name accent↔dim; normal otherwise.
 	pulsePhase += 1;
-	const name = isTalking(task) ? theme.fg(pulsePhase % 2 === 0 ? "accent" : "dim", `${task.agent}⇄`) : task.agent;
+	const name = isTalking(task) ? theme.fg(pulsePhase % 2 === 0 ? "accent" : "dim", `${task.agent} ⇄`) : task.agent;
 	return `${statusIcon(task.status)} ${name} · ${gate}${activity}${colorNums(tail, theme)}`;
 }
 /**
