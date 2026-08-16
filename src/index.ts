@@ -239,6 +239,12 @@ export default function (pi: ExtensionAPI) {
 			// ponytail: mode/count already shown on the call line above; result header only adds progress + status.
 			const header = `${statusIcon(run.status)} ${theme.fg("accent", `${run.tasks.filter((t) => t.status === "completed").length}/${run.tasks.length} done`)}${run.background ? ` ${theme.fg("muted", "(background)")}` : ""} ${theme.fg("muted", run.status)}`;
 			if (!expanded) {
+				// Background: the spawn snapshot is always "0 tools" noise and the footer widget
+				// already shows live per-task state — keep the card to the header only.
+				if (run.background) {
+					const usage = formatUsage(run.aggregateUsage);
+					return new Text(usage ? `${header}\n${theme.fg("dim", usage)}` : header, 0, 0);
+				}
 				const lines = [header, ...run.tasks.map((task) => `  ${themedTaskLine(task, theme)}`)];
 				const usage = formatUsage(run.aggregateUsage);
 				if (usage) lines.push(theme.fg("dim", usage));
