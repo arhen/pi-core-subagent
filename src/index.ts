@@ -1243,7 +1243,8 @@ export default function (pi: ExtensionAPI) {
 		renderResult(result, { expanded }, theme) {
 			const run = result.details?.run;
 			if (!run) return new Text(result.content[0]?.type === "text" ? result.content[0].text : "", 0, 0);
-			const header = `${statusIcon(run.status)} ${theme.fg("toolTitle", theme.bold(`subagents ${run.mode}${run.background ? " (bg)" : ""}`))} ${theme.fg("accent", `${run.tasks.filter((t) => t.status === "completed").length}/${run.tasks.length}`)} ${theme.fg("muted", run.status)}`;
+			// ponytail: mode/count already shown on the call line above; result header only adds progress + status.
+			const header = `${statusIcon(run.status)} ${theme.fg("accent", `${run.tasks.filter((t) => t.status === "completed").length}/${run.tasks.length} done`)}${run.background ? ` ${theme.fg("muted", "(background)")}` : ""} ${theme.fg("muted", run.status)}`;
 			if (!expanded) {
 				const lines = [header, ...run.tasks.map((task) => `  ${taskLine(task)}`)];
 				const usage = formatUsage(run.aggregateUsage);
