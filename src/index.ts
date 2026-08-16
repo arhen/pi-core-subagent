@@ -1133,7 +1133,19 @@ export default function (pi: ExtensionAPI) {
 		renderCall(args, theme) {
 			const mode = args.chain?.length ? `chain ${args.chain.length}` : args.tasks?.length ? `parallel ${args.tasks.length}` : `single ${args.agent ?? "?"}`;
 			const flags = [args.background ? "bg" : "", args.allowIntercom ? "talk" : ""].filter(Boolean).join(" ");
-			return new Text(`${theme.fg("toolTitle", theme.bold("subagent"))} ${theme.fg("accent", mode)}${flags ? ` ${theme.fg("muted", `[${flags}]`)}` : ""}`, 0, 0);
+			// Params used, dimmed: model, thinking, toolset, per-task write count.
+			const tasks = args.tasks ?? args.chain ?? [];
+			const writeCount = tasks.filter((t: any) => t.write).length;
+			const parts: string[] = [];
+			if (args.model) parts.push(args.model);
+			if (args.thinking) parts.push(args.thinking);
+			if (args.write) parts.push("write");
+			else if (writeCount === 0) parts.push("read-only");
+			if (writeCount > 0) parts.push(`${writeCount} write`);
+			if (args.concurrency) parts.push(`c${args.concurrency}`);
+			if (args.maxRuntimeMs) parts.push(`${Math.round(args.maxRuntimeMs / 60000)}m`);
+			const params = parts.length > 0 ? `\n  ${theme.fg("dim", parts.join(" · "))}` : "";
+			return new Text(`${theme.fg("toolTitle", theme.bold("subagent"))} ${theme.fg("accent", mode)}${flags ? ` ${theme.fg("muted", `[${flags}]`)}` : ""}${params}`, 0, 0);
 		},
 		renderResult(result, { expanded }, theme) {
 			const run = result.details?.run;
