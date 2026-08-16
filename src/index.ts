@@ -1402,7 +1402,21 @@ export default function (pi: ExtensionAPI) {
 			if (args.concurrency) parts.push(`${args.concurrency} at a time`);
 			if (args.maxRuntimeMs) parts.push(`${Math.round(args.maxRuntimeMs / 60000)}m limit`);
 			const params = parts.length > 0 ? `\n  ${theme.fg("dim", parts.join(" · "))}` : "";
-			return new Text(`${theme.fg("toolTitle", theme.bold("subagent"))} ${theme.fg("accent", mode)}${flags ? ` ${theme.fg("muted", `[${flags}]`)}` : ""}${params}`, 0, 0);
+			// The plan the model actually wrote: ids, edges, toolset. Streams in as args arrive,
+			// so a graph is visible before the first child spawns.
+			const plan = tasks
+				.filter((t: any) => t.agent || t.id)
+				.map((t: any, i: number) => {
+					const id = t.id ?? `task_${i + 1}`;
+					const edge = t.needs?.length ? theme.fg("muted", ` ← ${t.needs.join(", ")}`) : "";
+					const mark = t.write ? theme.fg("warning", " ✎") : "";
+					// Plain clip, not truncateText — that one appends a multi-line session-file notice.
+					const flat = String(t.task ?? "").replace(/\s+/g, " ").trim();
+					const what = flat ? theme.fg("dim", ` ${flat.length > 64 ? `${flat.slice(0, 64)}…` : flat}`) : "";
+					return `\n  ${theme.fg("muted", id)} ${theme.fg("accent", t.agent ?? "…")}${mark}${edge}${what}`;
+				})
+				.join("");
+			return new Text(`${theme.fg("toolTitle", theme.bold("subagent"))} ${theme.fg("accent", mode)}${flags ? ` ${theme.fg("muted", `[${flags}]`)}` : ""}${params}${plan}`, 0, 0);
 		},
 		renderResult(result, { expanded }, theme) {
 			const run = result.details?.run;
