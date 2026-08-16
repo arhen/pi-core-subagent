@@ -3,7 +3,7 @@
  * Pure logic only — no pi runtime needed. Run: bun test
  */
 import { describe, expect, test } from "bun:test";
-import { classifyFailure } from "../src/index.ts";
+import { classifyFailure, validateThinking } from "../src/index.ts";
 import { createWatchdog } from "../src/child.ts";
 import { createMailbox } from "../src/mailbox.ts";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
@@ -96,5 +96,36 @@ describe("watchdog", () => {
 		wd.dispose();
 		wd.dispose();
 		expect(wd).toBeTruthy();
+	});
+});
+
+describe("validateThinking", () => {
+	const reasoningModel = { id: "m", name: "m", provider: "p", reasoning: true, thinkingLevelMap: { low: null, high: "high", max: "max" } } as never;
+	const noReasoningModel = { id: "m", name: "m", provider: "p", reasoning: false } as never;
+	const noMapModel = { id: "m", name: "m", provider: "p", reasoning: true } as never;
+
+	test("null in thinkingLevelMap → rejected with supported list", () => {
+		expect(() => validateThinking(reasoningModel, "low")).toThrow(/not supported.*Supported: high \| max/);
+	});
+	test("supported level passes", () => {
+		expect(() => validateThinking(reasoningModel, "high")).not.toThrow();
+		expect(() => validateThinking(reasoningModel, "max")).not.toThrow();
+	});
+	test("missing key falls back to provider default", () => {
+		expect(() => validateThinking(reasoningModel, "medium")).not.toThrow();
+	});
+	test("off always allowed", () => {
+		expect(() => validateThinking(reasoningModel, "off")).not.toThrow();
+		expect(() => validateThinking(noReasoningModel, "off")).not.toThrow();
+	});
+	test("non-reasoning model rejects thinking", () => {
+		expect(() => validateThinking(noReasoningModel, "high")).toThrow(/does not support thinking/);
+	});
+	test("no map + reasoning → provider defaults", () => {
+		expect(() => validateThinking(noMapModel, "high")).not.toThrow();
+	});
+	test("undefined model/level → no-op", () => {
+		expect(() => validateThinking(undefined, "high")).not.toThrow();
+		expect(() => validateThinking(reasoningModel, undefined)).not.toThrow();
 	});
 });

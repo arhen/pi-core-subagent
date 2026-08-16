@@ -14,7 +14,7 @@
 import type { AgentSessionEvent, ExtensionAPI, ExtensionContext, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { StringEnum, type AssistantMessage } from "@earendil-works/pi-ai";
+import { StringEnum, type Api, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -337,6 +337,24 @@ function resolveChildModel(ctx: ExtensionContext, explicit: string | undefined) 
 	return ctx.model; // inherit the parent's active model
 }
 
+/** Validate a thinking level against the RESOLVED model's registry entry.
+ *  thinkingLevelMap: null = unsupported, missing key = provider default,
+ *  absent map = provider defaults. Non-reasoning models only accept "off". */
+export function validateThinking(model: Model<Api> | undefined, level: string | undefined): void {
+	if (!level || level === "off") return;
+	if (!model) return;
+	const map = model.thinkingLevelMap;
+	if (map && level in map && map[level as keyof typeof map] === null) {
+		const supported = Object.keys(map).filter((k) => map[k as keyof typeof map] !== null);
+		throw new Error(
+			`Thinking level "${level}" is not supported by ${model.provider}/${model.id}. Supported: ${supported.length ? supported.join(" | ") : "none — use thinking: \"off\""}.`,
+		);
+	}
+	if (!model.reasoning) {
+		throw new Error(`Model ${model.provider}/${model.id} does not support thinking. Use thinking: "off".`);
+	}
+}
+
 // Cached catalog removed: agents are defined inline by the leader per call,
 // so there is nothing to inject into the parent context. Zero per-request cost.
 
@@ -570,10 +588,24 @@ class SubagentManager {
 		// (~/.agents, .pi/agents, user dir). Never creates files.
 		const fileAgent = input.prompt?.trim() ? undefined : lookupAgent(task.agent, task.cwd);
 		const prompt = input.prompt?.trim() || fileAgent?.prompt;
-		const model = resolveChildModel(ctx, input.model ?? fileAgent?.model);
 		const thinking = input.thinking ?? fileAgent?.thinking;
 		const baseTools = input.tools ?? (input.write ? WRITE_TOOLS : fileAgent?.tools ?? READONLY_TOOLS);
 		const tools = [...baseTools, ...(run.allowIntercom ? CHILD_TALK_TOOLS : [])];
+
+		// Model + thinking resolve against the pi model registry; a bad request
+		// fails the TASK with a helpful message, not the whole run.
+		let model: Model<Api> | undefined;
+		try {
+			model = resolveChildModel(ctx, input.model ?? fileAgent?.model);
+			validateThinking(model, thinking);
+		} catch (err) {
+			this.updateTask(run, task, {
+				status: "failed",
+				error: err instanceof Error ? err.message : String(err),
+				endedAt: Date.now(),
+			}, ctx, onUpdate);
+			return;
+		}
 
 		this.updateTask(run, task, {
 			status: "starting",
