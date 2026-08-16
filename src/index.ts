@@ -76,7 +76,8 @@ export default function (pi: ExtensionAPI) {
 		);
 	};
 	pi.registerCommand("subagents", {
-		description: "List subagent runs. `/subagents peek` opens the browsable pane; `/subagents auto-bg on|off` toggles background-by-default.",
+		description:
+			"List subagent runs. `/subagents peek` opens the browsable pane; `/subagents auto-bg on|off` toggles background-by-default.",
 		handler: async (args, ctx) => {
 			const arg = String(args ?? "")
 				.trim()
@@ -86,9 +87,15 @@ export default function (pi: ExtensionAPI) {
 				const value = arg.split(/\s+/)[1];
 				if (value === "on" || value === "off") {
 					const next = manager.setAutoBg(value === "on");
-					ctx.ui.notify(`auto-bg ${next ? "on" : "off"} — subagent calls default to ${next ? "background" : "blocking (inline result)"}.`, "info");
+					ctx.ui.notify(
+						`auto-bg ${next ? "on" : "off"} — subagent calls default to ${next ? "background" : "blocking (inline result)"}.`,
+						"info",
+					);
 				} else {
-					ctx.ui.notify(`auto-bg is ${manager.autoBgOn ? "on" : "off"} — use \`/subagents auto-bg on|off\` to change it.`, "info");
+					ctx.ui.notify(
+						`auto-bg is ${manager.autoBgOn ? "on" : "off"} — use \`/subagents auto-bg on|off\` to change it.`,
+						"info",
+					);
 				}
 				return;
 			}
@@ -128,7 +135,7 @@ export default function (pi: ExtensionAPI) {
 		// ponytail: this string is billed on every request. No example block — an example
 		// biases the model toward one shape; guidelines + JSON schema describe all of them.
 		description:
-			'Run isolated subagents (own context, own session). You invent each agent: name, optional system prompt, toolset (read-only default, write:true to edit). Use `agent`+`task` for one, `tasks` for many. `needs` declares dependency edges: a task waits for its needs and receives their outputs prepended to its prompt. background is the default (returns a runId immediately; toggle via `/subagents auto-bg off`); set background:false when you need the result inline in this turn. allowIntercom:true lets children talk to you and each other.',
+			"Run isolated subagents (own context, own session). You invent each agent: name, optional system prompt, toolset (read-only default, write:true to edit). Use `agent`+`task` for one, `tasks` for many. `needs` declares dependency edges: a task waits for its needs and receives their outputs prepended to its prompt. background is the default (returns a runId immediately; toggle via `/subagents auto-bg off`); set background:false when you need the result inline in this turn. allowIntercom:true lets children talk to you and each other.",
 		promptSnippet: "Define and delegate work to specialized subagents.",
 		promptGuidelines: [
 			"Use subagent when independent review, testing, research, or parallel analysis improves quality.",

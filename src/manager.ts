@@ -217,7 +217,9 @@ export class SubagentManager {
 	/** Flip the background-by-default flag; persists to the agent dir. Returns the new value. */
 	setAutoBg(on: boolean): boolean {
 		this.autoBg = on;
-		void writeFile(join(getAgentDir(), "subagents-config.json"), JSON.stringify({ autoBg: on }, null, 2)).catch(() => {});
+		void writeFile(join(getAgentDir(), "subagents-config.json"), JSON.stringify({ autoBg: on }, null, 2)).catch(
+			() => {},
+		);
 		return on;
 	}
 
