@@ -100,7 +100,7 @@ Background + intercom:
 | `send_agent_message` | message to a sibling subagent's mailbox (`to` = its task id, or `"leader"`) |
 | `poll_agent_messages` | drain this subagent's mailbox |
 
-## Peek — `/peek` or `ctrl+shift+a`
+## Peek — `/subagents peek` or `ctrl+shift+a`
 
 Read-only pane over the session's subagents:
 

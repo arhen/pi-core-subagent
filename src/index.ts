@@ -1202,18 +1202,6 @@ const ReplyParam = Type.Object({
 export default function (pi: ExtensionAPI) {
 	const manager = new SubagentManager(pi);
 
-	pi.registerCommand("subagents", {
-		description: "Show recent subagent runs",
-		handler: async (_args, ctx) => {
-			const runs = manager.listRuns().slice(0, 10);
-			if (runs.length === 0) {
-				ctx.ui.notify("No subagent runs in this session.", "info");
-				return;
-			}
-			ctx.ui.notify(runs.flatMap((run) => compactLines(run).concat("")).join("\n") || "No subagent runs in this session.", "info");
-		},
-	});
-
 	/** Read-only peek: browse agents, enter to tail one. Never mutates run state. */
 	const openPeek = async (ctx: ExtensionContext) => {
 		if (!ctx.hasUI) return;
@@ -1242,7 +1230,18 @@ export default function (pi: ExtensionAPI) {
 			{ overlay: true, overlayOptions: { anchor: "center", width: "70%", minWidth: 60, maxHeight: "70%", margin: 2 } },
 		);
 	};
-	pi.registerCommand("peek", { description: "Peek at running subagents (shift+↑↓ or j/k move, enter tails)", handler: (_args, ctx) => openPeek(ctx) });
+	pi.registerCommand("subagents", {
+		description: "List subagent runs. `/subagents peek` opens the browsable pane.",
+		handler: async (args, ctx) => {
+			if (String(args ?? "").trim().toLowerCase() === "peek") return openPeek(ctx);
+			const runs = manager.listRuns().slice(0, 10);
+			if (runs.length === 0) {
+				ctx.ui.notify("No subagent runs in this session.", "info");
+				return;
+			}
+			ctx.ui.notify(runs.flatMap((run) => compactLines(run).concat("")).join("\n"), "info");
+		},
+	});
 	// ctrl+shift+s belongs to pi-web-access (search curator); 'a' for agents is free.
 	pi.registerShortcut("ctrl+shift+a", { description: "Peek at running subagents", handler: openPeek });
 
