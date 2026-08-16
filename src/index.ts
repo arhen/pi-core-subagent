@@ -18,7 +18,6 @@ import { StringEnum, type Api, type AssistantMessage, type Model } from "@earend
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { lookupAgent } from "./agents.ts";
 import { CHILD_TALK_TOOLS, createChildTools, createWatchdog, type ChildHandlers } from "./child.ts";
 import { createMailbox, type Mailbox } from "./mailbox.ts";
 
@@ -631,17 +630,16 @@ class SubagentManager {
 
 		// Inline params win; otherwise fall back to an existing agent file
 		// (~/.agents, .pi/agents, user dir). Never creates files.
-		const fileAgent = input.prompt?.trim() ? undefined : lookupAgent(task.agent, task.cwd);
-		const prompt = input.prompt?.trim() || fileAgent?.prompt;
-		const thinking = input.thinking ?? fileAgent?.thinking;
-		const baseTools = input.tools ?? (input.write ? WRITE_TOOLS : fileAgent?.tools ?? READONLY_TOOLS);
+		const prompt = input.prompt?.trim();
+		const thinking = input.thinking;
+		const baseTools = input.tools ?? (input.write ? WRITE_TOOLS : READONLY_TOOLS);
 		const tools = [...baseTools, ...(run.allowIntercom ? CHILD_TALK_TOOLS : [])];
 
 		// Model + thinking resolve against the pi model registry; a bad request
 		// fails the TASK with a helpful message, not the whole run.
 		let model: Model<Api> | undefined;
 		try {
-			model = resolveChildModel(ctx, input.model ?? fileAgent?.model);
+			model = resolveChildModel(ctx, input.model);
 			validateThinking(model, thinking);
 		} catch (err) {
 			this.updateTask(run, task, {
@@ -655,7 +653,7 @@ class SubagentManager {
 		this.updateTask(run, task, {
 			status: "starting",
 			startedAt: Date.now(),
-			model: input.model ?? fileAgent?.model,
+			model: input.model,
 			thinking,
 			tools,
 		}, ctx, onUpdate);
@@ -1009,7 +1007,7 @@ let eventSeq = 0;
 
 const TaskItem = Type.Object({
 	id: Type.Optional(Type.String({ description: "Optional stable task id" })),
-	agent: Type.String({ minLength: 1, description: "Agent name. Invent it (inline prompt below), or reuse a name from .agents/, .pi/agents/, or ~/.pi/agent/agents/ to inherit its prompt and toolset. Never creates files." }),
+	agent: Type.String({ minLength: 1, description: "Agent name you invent. Always define the agent inline: prompt (system prompt) + toolset (write: true for write access). Never create agent files." }),
 	task: Type.String({ minLength: 1, description: "Task for this agent" }),
 	prompt: Type.Optional(Type.String({ description: "System prompt defining this agent's behavior. Optional — a minimal default is used." })),
 	write: Type.Optional(Type.Boolean({ description: "true = write toolset (read, bash, edit, write); default false = read-only (read, grep, find, ls)" })),
