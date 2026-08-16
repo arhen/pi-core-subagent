@@ -1,6 +1,6 @@
 {
   "name": "@arhen/pi-core-subagent",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "type": "module",
   "description": "pi extension: fast in-process subagents with single/parallel/chain, background runs, intercom and agent-to-agent mailbox. Leader defines agents inline.",
   "license": "MIT",
