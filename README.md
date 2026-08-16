@@ -4,9 +4,15 @@
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![pi extension](https://img.shields.io/badge/pi-extension-7c3aed)](https://github.com/earendil-works/pi)
 
-Minimalist pi extension: **fast in-process subagents** with single / parallel / chain modes, background runs, cancellation, intercom (child↔leader) and an agent↔agent mailbox.
+Minimalist pi extension: **fast in-process subagents** with single / parallel / graph modes, background runs, cancellation, intercom (child↔leader) and an agent↔agent mailbox.
 
 Built for one job: delegate work to isolated subagents **without bloating the parent context**.
+
+One rule underneath everything else:
+
+> **A task is a graph, not a checklist.** Nodes are workers, edges are data dependencies. The edge both gates the dependent *and* hands it the upstream output — so "the coordinator forgot to pass X" stops being a failure mode. Where there are no edges, there is no graph: flat fan-out stays flat.
+
+That is [Graph Protocol](#graph-protocol), applied to the runtime rather than to the prompt.
 
 ![Subagents widget](docs/subagents-widget.png)
 
@@ -14,6 +20,11 @@ Built for one job: delegate work to isolated subagents **without bloating the pa
 
 ## Design principles
 
+- **The delegation is the graph.** `needs` declares edges; the scheduler runs each wave of ready tasks in parallel and gates the rest. One code path for single, parallel, chain and graph — `chain` is just `needs: [previous]`. ([why](#why-waves-instead-of-more-agents))
+- **Edges carry data, not just order.** An upstream task's output is prepended to its dependents' prompts automatically. The coordinator cannot forget to pass it, because it never passes it.
+- **A bad graph fails before it spawns.** Unknown ids, self-edges and cycles are rejected at call time — never halfway through a run with three children already burning tokens.
+- **Proof is an exit code, never a self-report.** Tasks are asked for a runnable `Verify:` command; the leader checks `git diff --stat`. Agents auditing their own work score ~0. ([why](#why-9-is-a-verification-command-not-a-self-report))
+- **No ceremony without edges.** Six independent reviewers stay six independent reviewers — no waves, no gates, no graph vocabulary imposed on flat work.
 - **No agent files, no discovery.** The leader defines every subagent inline per call — name, system prompt, toolset. Nothing is read from or written to disk.
 - **Two toolsets only.** Read-only (`read, grep, find, ls` — default) or write (`read, grep, find, ls, bash, edit, write` — `write: true`). No per-agent tool config surface.
 - **In-process** — children are `AgentSession`s in the same runtime. No process spawn, no context bleed.
@@ -64,6 +75,38 @@ Chain — `{previous}` is replaced with the prior agent's output:
 }
 ```
 
+## Graph mode — `needs`
+
+`parallel` runs everything at once; `chain` runs everything one at a time. Most real work is neither. Give a task an `id` and list the ids it `needs`:
+
+```json
+{
+  "tasks": [
+    { "id": "api", "agent": "api-mapper", "task": "Map every route in src/api/" },
+    { "id": "db",  "agent": "db-mapper",  "task": "Map the schema in src/db/" },
+    { "id": "doc", "agent": "writer", "needs": ["api", "db"], "write": true,
+      "task": "Write ARCHITECTURE.md from the maps above. Verify: test -s ARCHITECTURE.md" }
+  ]
+}
+```
+
+```
+wave 1: api ∥ db     →  gate  →  wave 2: doc
+```
+
+What the edge does:
+
+- **Gates** — `doc` starts only after both `api` and `db` finish.
+- **Carries** — `api`'s and `db`'s outputs are prepended to `doc`'s prompt as `## Output of api` / `## Output of db`. You do not pass them yourself, and you cannot forget to.
+- **Skips on breakage** — if an upstream fails or is aborted, dependents are marked aborted instead of running against a prompt with a hole in it.
+
+Rules:
+
+- Tasks with no unmet `needs` run together, throttled by `concurrency`.
+- Unknown ids, self-edges and cycles are rejected **before any child spawns**.
+- `chain` is exactly `needs: [previous]` — same scheduler, kept for convenience. `{previous}` still expands.
+- Zero `needs` anywhere = plain parallel. No ceremony added to flat fan-out.
+
 Background + intercom:
 
 ```json
@@ -80,7 +123,7 @@ Background + intercom:
 
 | Tool | Purpose |
 |---|---|
-| `subagent` | single / `tasks` (parallel) / `chain` (`{previous}`); `background:true` fire-and-forget; `allowIntercom:true` enables child talk tools; `notifyPerTask: true` wakes you as each task completes (default off) |
+| `subagent` | single / `tasks` (parallel or graph via `needs`) / `chain` (`{previous}`); `background:true` fire-and-forget; `allowIntercom:true` enables child talk tools; `notifyPerTask: true` wakes you as each task completes (default off) |
 | `subagent_status` | live per-task snapshot (non-blocking) |
 | `subagent_result` | full output of a run or one task |
 | `await_subagent` | block until a run finishes (optional `timeoutMs`) |
@@ -89,7 +132,7 @@ Background + intercom:
 
 ### Per-task fields
 
-`agent` (name you invent — required), `task` (required), `prompt` (system prompt, optional — minimal default used), `write` (toolset, default read-only), plus optional `model` (`provider/model-id`), `thinking` (validated enum: `off|minimal|low|medium|high|xhigh|max`), `tools` (explicit allowlist), `cwd`, `maxRuntimeMs`, `id`. Top-level only: `background`, `notifyPerTask`, `allowIntercom`, `concurrency`.
+`agent` (name you invent — required), `task` (required), `prompt` (system prompt, optional — minimal default used), `write` (toolset, default read-only), plus optional `model` (`provider/model-id`), `thinking` (validated enum: `off|minimal|low|medium|high|xhigh|max`), `tools` (explicit allowlist), `cwd`, `maxRuntimeMs`, `id`, `needs` (dependency edges — see [Graph mode](#graph-mode--needs)). Top-level only: `background`, `notifyPerTask`, `allowIntercom`, `concurrency`.
 
 ### Child talk tools (when `allowIntercom: true`)
 
@@ -115,12 +158,61 @@ Read-only pane over the session's subagents:
 - Background completion: 3-line notice. Full text only via `subagent_result`.
 - Children: isolated sessions; talk tools injected only when `allowIntercom`; each child's prompt states its own task id and its siblings' so mailbox addressing works. Model resolution: explicit `provider/model-id` or bare id via the pi model registry → the parent's current model → settings default. Thinking levels validated against the resolved model's `thinkingLevelMap`.
 
+## What this is built on
+
+### Graph Protocol
+<a id="graph-protocol"></a>
+
+`needs` is an implementation of [Graph Protocol](https://gist.github.com/r17x/90eb2f7be93932b5693753aedb09c01a) — a delegation discipline that treats a task as a graph (`Delegation<A, E, R>`) rather than a checklist. Its ten sections map onto this extension as follows:
+
+| § | Protocol | Here |
+|---|---|---|
+| §1 | nodes, domains, edges | one `agent` owns one task; `needs` are the edges |
+| §2 | happy path as execution graph, waves + gates | wave scheduler: `ready = tasks whose needs are settled` |
+| §3 | one worker or many | `single` vs `tasks` |
+| §4 | break points: wrong context, **missing input**, misinterpretation | missing input is structurally impossible — the edge carries the output |
+| §5 | R: subgraph, method, **verification command**, WHY | prompt guidelines require a runnable `Verify:` line per task |
+| §6 | structured at the boundary | in: upstream outputs prepended as named blocks. out: prose (see below) |
+| §7 | observe without changing the graph | the widget and `/subagents peek` are read-only |
+| §8 | worker attention acquired and released | spawn → terminal status; aborted upstream releases dependents immediately |
+| §9 | prove it: delegated vs implemented | **deliberately not self-reported** — see below |
+| §10 | prompt = subgraph, return = implemented graph | prompt yes; return kept as prose |
+
+### Why §9 is a verification command, not a self-report
+
+The protocol asks the coordinator to compare the delegated subgraph against the graph the worker says it implemented. We implement the comparison against **the filesystem and the exit code**, not against the worker's account of itself, because self-reports carry close to zero signal about exactly the failure §9 exists to catch:
+
+- Asked to audit its own work against 34 real violations, an agent reported **0** — at 90–100 confidence. A *fresh* instance of the same model shown the same output caught 7 (p = 0.0156). A deterministic checker caught all 34. ([Armalo Labs, 2026](https://www.armalo.ai/labs/research/2026-06-11-zero-bit-self-audit))
+- Across 9,876 τ2-bench and 1,879 AppWorld trajectories, "false success" reached **75.8%** of self-assessing coding-agent failures; adding an LLM judge scored **0.54–0.65 AUROC** (0.5 = coin flip). ([arXiv:2606.09863](https://doi.org/10.48550/arxiv.2606.09863))
+- LLM judges reading agent traces can be flipped by rewriting the trace — the exact surface a self-reported graph exposes. ([arXiv:2601.14691](https://arxiv.org/html/2601.14691))
+
+So §9 in practice is two things you already have:
+
+```sh
+# in the task text — the worker must prove it, not claim it
+Verify: npx tsc --noEmit && bun test
+
+# in the leader, after the run — ground truth, not narrative
+git diff --stat
+```
+
+If files outside a worker's subgraph were touched, the diff says so. A structured return schema would only add a second, less trustworthy witness.
+
+### Why waves instead of "more agents"
+
+Flat fan-out is not free — orchestration cost is `critical path + α × cross-agent communication`, and ignoring the second term is what makes added agents *lose* to a single one:
+
+- Dependency-graph partitioning vs flat file-parallel spawning across 28 real repos: **+14.0% pass rate, 2.10× wall-clock, −35% API cost**, with the largest gains on the most dependency-dense projects. Flat parallel inflated cost 60% for a 1.56× speedup; an agent-team baseline was fastest but scored *below sequential* on code quality. ([arXiv:2606.00953](https://arxiv.org/html/2606.00953v1))
+- Dynamic task graphs across 300 trials: 47.5% of baseline token cost, 79.7% accuracy vs 57.6% for a static graph — and, notably, **static tied dynamic when the structure was genuinely known up front**, which is the case `needs` targets. The "frontier" (ready set) in this scheduler is theirs. ([arXiv:2605.06320](https://arxiv.org/html/2605.06320))
+
+The corollary is in the design principles: when there are no edges, don't draw a graph. Six independent reviewers stay six independent reviewers.
+
 ## Development
 
 ```sh
 bun install        # dev deps (typecheck/test only; runtime uses pi's bundled SDK)
 npx tsc --noEmit
-bun test           # pure-logic smoke tests (mailbox, failure classification, watchdog)
+bun test           # pure-logic tests (wave scheduling, edge payload, mailbox, failure classification, watchdog)
 ```
 
 Runtime state: runs persist to `<parent-session>.subagents.json` sidecar; restored (non-terminal → aborted) on session start.
