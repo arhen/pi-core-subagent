@@ -268,6 +268,7 @@ class SubagentsWidget implements Component {
 		const active = !TERMINAL.includes(run.status);
 		const head = active ? "accent" : "dim";
 		const lines = [truncateToWidth(`${this.theme.fg(head, active ? "●" : "○")} ${this.theme.fg(head, `Subagents (${done}/${run.tasks.length})`)}`, width, "…")];
+		const allDone = TERMINAL.includes(run.status);
 		const visible = run.tasks.slice(0, MAX_TASKS);
 		visible.forEach((task, i) => {
 			const last = i === visible.length - 1 && run.tasks.length <= MAX_TASKS;
@@ -276,7 +277,10 @@ class SubagentsWidget implements Component {
 				!TERMINAL.includes(task.status) && task.lastActivity
 					? `${this.theme.fg("dim", `→ ${task.lastActivity}`)} · `
 					: "";
-			const line = `${statusIcon(task.status)} ${task.agent} · ${activity}${taskStatsWithUsage(task)} · ${taskTimer(task)}`;
+			// Completed run: dim everything except the agent name.
+			const line = allDone
+				? `${this.theme.fg("dim", `${statusIcon(task.status)} `)}${task.agent} ${this.theme.fg("dim", `· ${taskStatsWithUsage(task)} · ${taskTimer(task)}`)}`
+				: `${statusIcon(task.status)} ${task.agent} · ${activity}${taskStatsWithUsage(task)} · ${taskTimer(task)}`;
 			lines.push(truncateToWidth(`${conn} ${line}`, width, "…"));
 		});
 		if (run.tasks.length > MAX_TASKS) lines.push(`${this.theme.fg("dim", "└─")} ${this.theme.fg("dim", `+${run.tasks.length - MAX_TASKS} more`)}`);
