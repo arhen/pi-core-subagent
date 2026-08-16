@@ -224,18 +224,20 @@ export class SubagentManager {
 	/** Flip the background-by-default flag; persists to the agent dir. Returns the new value. */
 	setAutoBg(on: boolean): boolean {
 		this.autoBg = on;
-		void writeFile(join(getAgentDir(), "subagents-config.json"), JSON.stringify({ autoBg: on, autoLimit: this.autoLimit }, null, 2)).catch(
-			() => {},
-		);
+		void writeFile(
+			join(getAgentDir(), "subagents-config.json"),
+			JSON.stringify({ autoBg: on, autoLimit: this.autoLimit }, null, 2),
+		).catch(() => {});
 		return on;
 	}
 
 	/** Flip the auto-limit flag; persists to the agent dir. Returns the new value. */
 	setAutoLimit(on: boolean): boolean {
 		this.autoLimit = on;
-		void writeFile(join(getAgentDir(), "subagents-config.json"), JSON.stringify({ autoBg: this.autoBg, autoLimit: on }, null, 2)).catch(
-			() => {},
-		);
+		void writeFile(
+			join(getAgentDir(), "subagents-config.json"),
+			JSON.stringify({ autoBg: this.autoBg, autoLimit: on }, null, 2),
+		).catch(() => {});
 		return on;
 	}
 
