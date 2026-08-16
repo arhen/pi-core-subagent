@@ -383,7 +383,7 @@ class SubagentManager {
 	private mailboxes: Mailbox = createMailbox();
 	private runControllers = new Map<string, AbortController>();
 	private widgetTimer: ReturnType<typeof setTimeout> | undefined;
-	private widgetRun: RunSnapshot | undefined;
+	private widgetRuns: RunSnapshot[] = [];
 
 	turnActivity = false;
 
@@ -399,7 +399,7 @@ class SubagentManager {
 
 	/** Hide the widget. */
 	clearWidget(ctx: ExtensionContext): void {
-		this.widgetRun = undefined;
+		this.widgetRuns = [];
 		this.widgetTui = null;
 		if (ctx.hasUI) {
 			try {
@@ -425,7 +425,7 @@ class SubagentManager {
 		this.widgetTui = null; // force re-registration on the next session
 		if (this.widgetTimer) clearTimeout(this.widgetTimer);
 		this.widgetTimer = undefined;
-		this.widgetRun = undefined;
+		this.widgetRuns = [];
 	}
 
 	// ── persistence (sidecar per parent session) ────────────────────────
@@ -508,19 +508,27 @@ class SubagentManager {
 	// The component self-animates the spinner via its own 100ms interval;
 	// scheduleWidget just throttles status changes into requestRender calls.
 	private widgetTui: TUI | null = null;
+	/** Upsert a run into the widget's visible set (all runs, not just the latest). */
+	private upsertWidgetRun(run: RunSnapshot | undefined): void {
+		if (!run) return;
+		const idx = this.widgetRuns.findIndex((r) => r.id === run.id);
+		if (idx >= 0) this.widgetRuns[idx] = run;
+		else this.widgetRuns.push(run);
+	}
 	private scheduleWidget(run: RunSnapshot | undefined, ctx?: ExtensionContext, onUpdate?: (partial: any) => void): void {
-		if (run) this.widgetRun = run;
-		if (this.widgetTimer || !this.widgetRun) return;
+		this.upsertWidgetRun(run);
+		if (this.widgetTimer || this.widgetRuns.length === 0) return;
 		this.widgetTimer = setTimeout(() => {
 			this.widgetTimer = undefined;
-			const target = this.widgetRun; // read at fire: never render a stale run
-			if (!target) return;
+			if (this.widgetRuns.length === 0) return;
+			const targets = [...this.widgetRuns]; // read at fire: never render stale runs
 			if (ctx?.hasUI) {
-				ctx.ui.setStatus("subagents", `subagents: ${target.tasks.filter((t) => !TERMINAL.includes(t.status)).length} running`);
+				const live = targets.reduce((n, r) => n + r.tasks.filter((t) => !TERMINAL.includes(t.status)).length, 0);
+				ctx.ui.setStatus("subagents", `subagents: ${live} running`);
 				this.ensureWidget(ctx);
 				this.widgetTui?.requestRender();
 			}
-			onUpdate?.({ content: [{ type: "text", text: compactLines(target).join("\n") }] });
+			onUpdate?.({ content: [{ type: "text", text: targets.flatMap(compactLines).join("\n") }] });
 		}, WIDGET_THROTTLE_MS);
 	}
 	private flushWidget(ctx?: ExtensionContext, onUpdate?: (partial: any) => void): void {
@@ -528,14 +536,12 @@ class SubagentManager {
 			clearTimeout(this.widgetTimer);
 			this.widgetTimer = undefined;
 		}
-		const run = this.widgetRun;
-		if (!run) return;
+		if (this.widgetRuns.length === 0) return;
 		if (ctx?.hasUI) {
-			ctx.ui.setStatus("subagents", `subagents: ${run.status}`);
 			this.ensureWidget(ctx);
 			this.widgetTui?.requestRender();
 		}
-		onUpdate?.({ content: [{ type: "text", text: compactLines(run).join("\n") }] });
+		onUpdate?.({ content: [{ type: "text", text: this.widgetRuns.flatMap(compactLines).join("\n") }] });
 	}
 	private ensureWidget(ctx: ExtensionContext): void {
 		if (this.widgetTui !== null || !ctx.hasUI) return;
@@ -543,7 +549,7 @@ class SubagentManager {
 			"subagents",
 			(tui, theme) => {
 				this.widgetTui = tui;
-				return new SubagentsWidget(() => this.widgetRun, theme);
+				return new SubagentsWidget(() => [...this.widgetRuns], theme);
 			},
 			{ placement: "aboveEditor" },
 		);
