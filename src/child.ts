@@ -100,7 +100,7 @@ export function createChildTools(taskId: string, handlers: ChildHandlers): ToolD
 					.map((m) => `from ${m.from}: ${m.text}`)
 					.join("\n");
 				const capped = body.length > 4000 ? body.slice(0, 4000).replace(/[\uD800-\uDBFF]$/, "") : body; // multibyte-safe
-				return { content: [{ type: "text" as const, text: body }], details: { messages } };
+				return { content: [{ type: "text" as const, text: capped }], details: { messages } };
 			},
 		},
 	];

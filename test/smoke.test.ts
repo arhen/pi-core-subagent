@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { classifyFailure, resolveChildModel, validateThinking } from "../src/index.ts";
-import { createWatchdog } from "../src/child.ts";
+import { createChildTools, createWatchdog } from "../src/child.ts";
 import { createMailbox } from "../src/mailbox.ts";
 
 describe("classifyFailure", () => {
@@ -20,6 +20,37 @@ describe("classifyFailure", () => {
 		for (const reason of ["max_tokens", "refusal", "length", "error"]) {
 			expect(classifyFailure(reason)?.status).toBe("failed");
 		}
+	});
+});
+
+describe("poll_agent_messages cap", () => {
+	const tools = createChildTools("task_1", {
+		onAskParent: async () => "ok",
+		onNotifyParent: () => {},
+		onSendMessage: () => true,
+		onPollMailbox: () => [{ from: "task_2", text: "x".repeat(5000), at: 0 }],
+	});
+	const poll = tools.find((t) => t.name === "poll_agent_messages")!;
+
+	test("mailbox dump is capped at 4000 chars", async () => {
+		const res = await (poll.execute as unknown as () => Promise<{ content: { text: string }[] }>)();
+		const text = (res as unknown as { content: { text: string }[] }).content[0]!.text;
+		expect(text).toHaveLength(4000);
+	});
+	test("truncation does not split a surrogate pair", async () => {
+		// 12-char prefix + "a" shifts the 4000-cut onto an odd boundary inside an emoji.
+		const emoji = createChildTools("task_1", {
+			onAskParent: async () => "ok",
+			onNotifyParent: () => {},
+			onSendMessage: () => true,
+			onPollMailbox: () => [{ from: "task_2", text: `a${String.fromCodePoint(0x1f600).repeat(2000)}`, at: 0 }],
+		});
+		const emojiPoll = emoji.find((t) => t.name === "poll_agent_messages")!;
+		const res = await (emojiPoll.execute as unknown as () => Promise<{ content: { text: string }[] }>)();
+		const text = (res as unknown as { content: { text: string }[] }).content[0]!.text;
+		const last = text.charCodeAt(text.length - 1);
+		expect(last < 0xd800 || last > 0xdbff).toBe(true); // no lone high surrogate
+		expect(text.length).toBeLessThanOrEqual(4000);
 	});
 });
 

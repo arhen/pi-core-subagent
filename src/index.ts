@@ -17,7 +17,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { StringEnum, type Api, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { join } from "node:path";
 import { CHILD_TALK_TOOLS, createChildTools, createWatchdog, type ChildHandlers } from "./child.ts";
 import { createMailbox, type Mailbox } from "./mailbox.ts";
@@ -48,24 +48,6 @@ interface UsageStats {
 	cacheWrite: number;
 	cost: number;
 	turns: number;
-}
-
-interface TaskInput {
-	id?: string;
-	/** Name the leader invents for this subagent (display + mailbox addressing). */
-	agent: string;
-	task: string;
-	/** Task ids this task depends on. The edge carries the upstream output into this prompt. */
-	needs?: string[];
-	/** System prompt the leader writes for this agent. Optional — a minimal default is used. */
-	prompt?: string;
-	/** true = write toolset; false/omitted = read-only toolset. */
-	write?: boolean;
-	tools?: string[];
-	model?: string;
-	thinking?: string;
-	cwd?: string;
-	maxRuntimeMs?: number;
 }
 
 interface TaskSnapshot {
@@ -1215,25 +1197,31 @@ class SubagentManager {
 	awaitRun(runId: string, timeoutMs?: number): Promise<RunSnapshot | undefined> {
 		const run = this.runs.get(runId);
 		if (!run) return Promise.resolve(undefined);
-		run.awaited = true;
-		if (TERMINAL.includes(run.status)) return Promise.resolve(cloneRun(run));
+		if (TERMINAL.includes(run.status)) {
+			run.awaited = true;
+			return Promise.resolve(cloneRun(run));
+		}
 		const settled = new Promise<RunSnapshot | undefined>((resolve) => {
 			const prev = this.settlers.get(runId);
 			this.settlers.set(runId, (r) => {
 				prev?.(r);
 				resolve(r);
 			});
-			// Settle may have run between the terminal check and wiring.
-			if (TERMINAL.includes(run.status)) resolve(cloneRun(run));
 		});
-		if (!timeoutMs) return settled;
-		return Promise.race([
-			settled,
-			new Promise<RunSnapshot | undefined>((resolve) => {
-				const timer = setTimeout(() => resolve(this.runs.get(runId) ? cloneRun(this.runs.get(runId)!) : undefined), timeoutMs);
-				settled.then(() => clearTimeout(timer));
-			}),
-		]);
+		if (timeoutMs) {
+			return Promise.race([
+				settled,
+				new Promise<RunSnapshot | undefined>((resolve) => {
+					const timer = setTimeout(() => resolve(this.runs.get(runId) ? cloneRun(this.runs.get(runId)!) : undefined), timeoutMs);
+					settled.then(() => clearTimeout(timer));
+				}),
+			]);
+		}
+		// Awaiting to completion: parent gets the real result, so suppress the
+		// completion notice. On timeout we resolve a snapshot and leave awaited
+		// unset, so the parent still receives the completion notification.
+		run.awaited = true;
+		return settled;
 	}
 }
 
@@ -1255,29 +1243,13 @@ const TaskItem = Type.Object({
 	needs: Type.Optional(Type.Array(Type.String(), { description: "Ids of tasks this one waits for; their outputs are prepended to this prompt." })),
 });
 
-type SubagentParamsShape = {
-	agent?: string;
-	task?: string;
-	prompt?: string;
-	write?: boolean;
-	tasks?: TaskInput[];
-	chain?: TaskInput[];
-	model?: string;
-	thinking?: string;
-	cwd?: string;
-	tools?: string[];
-	concurrency?: number;
-	maxRuntimeMs?: number;
-	background?: boolean;
-	allowIntercom?: boolean;
-	notifyPerTask?: boolean;
-};
 
 const SubagentParams = Type.Object({
 	agent: Type.Optional(Type.String({ minLength: 1, description: "Name you invent for this subagent (single mode)" })),
 	task: Type.Optional(Type.String({ minLength: 1, description: "Task (single mode)" })),
 	prompt: Type.Optional(Type.String({ description: "System prompt for this agent (single mode)" })),
 	write: Type.Optional(Type.Boolean({ description: "true = write toolset; default false = read-only (single mode)" })),
+	tools: Type.Optional(Type.Array(Type.String(), { description: "Explicit tool allowlist (overrides the toolset) (single mode)" })),
 	tasks: Type.Optional(Type.Array(TaskItem, { description: "Parallel tasks" })),
 	chain: Type.Optional(Type.Array(TaskItem, { description: "Sequential tasks; {previous} = prior output" })),
 	model: Type.Optional(Type.String({ description: "Model override (single mode)" })),
@@ -1286,9 +1258,13 @@ const SubagentParams = Type.Object({
 	concurrency: Type.Optional(Type.Number({ description: `Parallel concurrency (default ${DEFAULT_CONCURRENCY}, max ${MAX_CONCURRENCY})` })),
 	maxRuntimeMs: Type.Optional(Type.Number({ description: "Per-task timeout, ms. Omit for no cap (default): tasks run until done, stalled, or user-aborted." })),
 	background: Type.Optional(Type.Boolean({ description: "Fire-and-forget: return immediately with a runId; you'll be notified on completion" })),
-	notifyPerTask: Type.Optional(Type.Boolean({ description: "Wake you (queued follow-up turn) as each task completes, even mid-run. Default false." })),
+	notifyPerTask: Type.Optional(Type.Boolean({ description: "Wake you (queued follow-up turn) as each task completes — background runs only, since blocking runs can't be woken mid-tool. Default false." })),
 	allowIntercom: Type.Optional(Type.Boolean({ description: "Let children ask you questions, notify you, and message sibling subagents" })),
 });
+
+/** Derived from the schemas — single source of truth, no hand-maintained mirror. */
+type TaskInput = Static<typeof TaskItem>;
+type SubagentParamsShape = Static<typeof SubagentParams>;
 
 const RunIdParam = Type.Object({ runId: Type.String({ description: "Run id from subagent()" }) });
 const ResultParam = Type.Object({
@@ -1391,7 +1367,7 @@ export default function (pi: ExtensionAPI) {
 		parameters: SubagentParams,
 		executionMode: "parallel", // sibling subagent calls run concurrently, not serialized
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			const typed = params as unknown as SubagentParamsShape;
+			const typed = params as SubagentParamsShape;
 			if (typed.background) {
 				const details = manager.startInBackground(typed, ctx);
 				return {
