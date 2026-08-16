@@ -10,7 +10,7 @@ Built for one job: delegate work to isolated subagents **without bloating the pa
 
 ## Design principles
 
-- **No agent files required, no discovery overhead.** The leader defines every subagent inline per call — name, system prompt, toolset. Existing files (`.agents/`, `.pi/agents/`, `~/.pi/agent/agents/`) are *looked up by name only when no inline prompt is given*; nothing is ever created or scanned per request.
+- **No agent files, no discovery.** The leader defines every subagent inline per call — name, system prompt, toolset. Nothing is read from or written to disk.
 - **Two toolsets only.** Read-only (`read, grep, find, ls` — default) or write (`read, grep, find, ls, bash, edit, write` — `write: true`). No per-agent tool config surface.
 - **In-process** — children are `AgentSession`s in the same runtime. No process spawn, no context bleed.
 - **Zero parent-context injection.** No catalog, no context hook. 6 slim tools total.
@@ -26,7 +26,7 @@ pi install npm:@arhen/pi-core-subagent
 
 ## Usage — the leader invents the agents
 
-Define agents inline (never creates files). If a task has **no inline `prompt`**, the extension looks up an existing file by agent name — `.agents/<name>.md` or `.pi/agents/<name>.md` (nearest project dir), then `~/.pi/agent/agents/<name>.md` — and inherits its prompt + tools. Inline params always win over the file. Model resolution: explicit `provider/model-id` (or bare id) via the pi model registry → agent-file `model` → the parent's current model → settings default.
+Define agents inline per call — never creates or reads agent files. Model resolution: explicit `provider/model-id` (or bare id) via the pi model registry → agent-file `model` → the parent's current model → settings default.
 
 ```json
 {
@@ -84,7 +84,7 @@ Background + intercom:
 
 ### Per-task fields
 
-`agent` (name you invent, or an existing file's name — required), `task` (required), `prompt` (system prompt, optional — falls back to file lookup, then a minimal default), `write` (toolset, default read-only), plus optional `model` (`provider/model-id`), `thinking` (validated enum: `off|minimal|low|medium|high|xhigh|max`), `tools` (explicit allowlist, overrides everything), `maxRuntimeMs`, `id`. Top-level only: `background`, `notifyPerTask`, `allowIntercom`, `concurrency`.
+`agent` (name you invent — required), `task` (required), `prompt` (system prompt, optional — minimal default used), `write` (toolset, default read-only), plus optional `model` (`provider/model-id`), `thinking` (validated enum: `off|minimal|low|medium|high|xhigh|max`), `tools` (explicit allowlist), `cwd`, `maxRuntimeMs`, `id`. Top-level only: `background`, `notifyPerTask`, `allowIntercom`, `concurrency`.
 
 ### Child talk tools (when `allowIntercom: true`)
 
@@ -99,7 +99,7 @@ Background + intercom:
 
 - Parent tools: 6 schemas with short descriptions. **No catalog, no context hook** — nothing injected per request.
 - Background completion: 3-line notice. Full text only via `subagent_result`.
-- Children: isolated sessions; talk tools injected only when `allowIntercom`; each child's prompt states its own task id and its siblings' so mailbox addressing works.
+- Children: isolated sessions; talk tools injected only when `allowIntercom`; each child's prompt states its own task id and its siblings' so mailbox addressing works. Model resolution: explicit `provider/model-id` or bare id via the pi model registry → the parent's current model → settings default. Thinking levels validated against the resolved model's `thinkingLevelMap`.
 
 ## Development
 

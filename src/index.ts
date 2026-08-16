@@ -98,7 +98,7 @@ interface RunSnapshot {
 	concurrency: number;
 	/** True once the parent awaited this run — completion notices are redundant then. */
 	awaited?: boolean;
-	/** Wake the parent (queued follow-up turn) as each task completes. Default true. */
+	/** Wake the parent (queued follow-up turn) as each task completes. Default false. */
 	notifyPerTask: boolean;
 	tasks: TaskSnapshot[];
 	aggregateUsage: UsageStats;
@@ -135,7 +135,9 @@ function aggregateUsage(tasks: TaskSnapshot[]): UsageStats {
 }
 function truncateText(text: string, max = FINAL_OUTPUT_CAP): string {
 	if (Buffer.byteLength(text, "utf8") <= max) return text;
-	return `${text.slice(0, max)}\n\n[Output truncated. Full child session is available in the session file.]`;
+	let out = text.slice(0, max);
+	while (Buffer.byteLength(out, "utf8") > max) out = out.slice(0, -1); // multibyte-safe
+	return `${out}\n\n[Output truncated. Full child session is available in the session file.]`;
 }
 function getFirstText(message: AssistantMessage): string {
 	for (const part of message?.content ?? []) {
@@ -460,9 +462,17 @@ class SubagentManager {
 			if (!Array.isArray(raw)) return;
 			runs = (raw as RunSnapshot[]).map((run) => {
 				const interrupted = run.tasks.some((t) => !TERMINAL.includes(t.status));
+				// A persisted "running" run whose tasks are all terminal (crash between
+				// task end and run end) must not stay "running" forever.
+				let status = interrupted ? ("aborted" as RunStatus) : run.status;
+				if (!TERMINAL.includes(status)) {
+					const anyFailed = run.tasks.some((t) => t.status === "failed");
+					const anyAborted = run.tasks.some((t) => t.status === "aborted");
+					status = anyFailed ? "failed" : anyAborted ? "aborted" : "completed";
+				}
 				return {
 					...run,
-					status: interrupted ? ("aborted" as RunStatus) : run.status,
+					status,
 					endedAt: interrupted ? Date.now() : run.endedAt,
 					tasks: run.tasks.map((t) => (TERMINAL.includes(t.status) ? t : { ...t, status: "aborted" as TaskStatus, error: t.error || "Interrupted by session reload" })),
 				};
@@ -486,7 +496,7 @@ class SubagentManager {
 			const parentFile = getParentSessionFile(ctx);
 			if (!parentFile) return;
 			const sidecar = parentFile.replace(/\.jsonl$/, ".subagents.json");
-			import("fs").then(({ writeFileSync }) => writeFileSync(sidecar, JSON.stringify(this.listRuns().map(cloneRun), null, 2)));
+			import("fs").then(({ writeFileSync }) => writeFileSync(sidecar, JSON.stringify(this.listRuns().slice(0, 50).map(cloneRun), null, 2)));
 		} catch {
 			/* ignore */
 		}
@@ -850,6 +860,13 @@ class SubagentManager {
 				? params.tasks!
 				: params.chain!;
 		if (inputs.length > MAX_TASKS) throw new Error(`Too many subagent tasks (${inputs.length}). Max is ${MAX_TASKS}.`);
+		const ids = new Set<string>();
+		for (const input of inputs) {
+			if (input.id !== undefined) {
+				if (ids.has(input.id)) throw new Error(`Duplicate task id: ${input.id}`);
+				ids.add(input.id);
+			}
+		}
 
 		const run: RunSnapshot = {
 			id: newId("run"),
@@ -909,7 +926,7 @@ class SubagentManager {
 				const input = { ...inputs[i]!, task: next };
 				task.task = input.task;
 				await this.runChild(run, task, input, ctx, signal, onUpdate);
-				if (run.notifyPerTask && TERMINAL.includes(task.status)) {
+				if (run.notifyPerTask && run.background && TERMINAL.includes(task.status)) {
 					this.notifyTask(run, task, task.status as "completed" | "failed" | "aborted");
 				}
 				if (task.status !== "completed") break;
@@ -919,7 +936,7 @@ class SubagentManager {
 			await mapWithConcurrency(run.tasks, run.mode === "single" ? 1 : run.concurrency, async (task) => {
 				const index = run.tasks.indexOf(task);
 				await this.runChild(run, task, inputs[index]!, ctx, signal, onUpdate);
-				if (run.notifyPerTask && TERMINAL.includes(task.status)) {
+				if (run.notifyPerTask && run.background && TERMINAL.includes(task.status)) {
 					this.notifyTask(run, task, task.status as "completed" | "failed" | "aborted");
 				}
 			});
@@ -969,7 +986,10 @@ class SubagentManager {
 				}
 				this.settleRun(run.id, run);
 				this.runControllers.delete(run.id);
+				for (const task of run.tasks) this.mailboxes.close(`${run.id}:${task.id}`);
+				this.emit("subagent:run-completed", { runId: run.id, status: "failed", run: cloneRun(run) });
 				this.notifyParent(run, "failed");
+				this.persist(ctx);
 			});
 		return { run: cloneRun(run), background: true };
 	}
@@ -988,7 +1008,7 @@ class SubagentManager {
 		for (const task of run.tasks) {
 			if (TERMINAL.includes(task.status)) continue;
 			task.status = "aborted";
-			task.error = task.error || "Canceled by subagent_cancel";
+			task.error = task.error || "Canceled by subagent_cancel"; // never overwrite a real error
 			task.endedAt = Date.now();
 			aborted += 1;
 		}
@@ -1026,9 +1046,10 @@ class SubagentManager {
 		if (!timeoutMs) return settled;
 		return Promise.race([
 			settled,
-			new Promise<RunSnapshot | undefined>((resolve) =>
-				setTimeout(() => resolve(this.runs.get(runId) ? cloneRun(this.runs.get(runId)!) : undefined), timeoutMs),
-			),
+			new Promise<RunSnapshot | undefined>((resolve) => {
+				const timer = setTimeout(() => resolve(this.runs.get(runId) ? cloneRun(this.runs.get(runId)!) : undefined), timeoutMs);
+				settled.then(() => clearTimeout(timer));
+			}),
 		]);
 	}
 }
@@ -1113,8 +1134,7 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify("No subagent runs in this session.", "info");
 				return;
 			}
-			ctx.ui.setWidget("subagents", runs.flatMap((run) => compactLines(run).concat("")), { placement: "aboveEditor" });
-			ctx.ui.notify(`Showing ${runs.length} subagent run(s).`, "info");
+			ctx.ui.notify(runs.flatMap((run) => compactLines(run).concat("")).join("\n") || "No subagent runs in this session.", "info");
 		},
 	});
 
