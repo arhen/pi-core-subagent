@@ -232,6 +232,8 @@ Background (default) + intercom — the run returns a runId immediately; you sta
 }
 ```
 
+**Steering a running child:** while a background run is active the leader stays responsive, and you can push a message into a live child's session mid-run with `steer_subagent` — e.g. `steer_subagent({ runId, taskId, message: "Ignore tests/, only audit runtime deps" })`. The message queues as a steer if the child is mid-turn and lands at its next model boundary. Omit `taskId` to steer every still-running task in the run. Combined with `notifyPerTask`, this makes a background run feel like a live team you can redirect, not a fire-and-forget blob.
+
 ## Tools
 
 | Tool | Purpose |
