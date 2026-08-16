@@ -654,8 +654,8 @@ export class SubagentManager {
 		const key = `${run.id}:${task.id}`;
 		try {
 			const subagentInstruction = run.allowIntercom
-				? `You are running as a subagent. Do not call subagent/delegation tools unless the parent explicitly asks. Return a concise final answer. You MAY use ask_parent only when truly blocked on information only the parent has; notify_parent for one-way updates; send_agent_message/poll_agent_messages to coordinate with siblings. Your mailbox address and siblings: ${task.roster ?? "(none)"}. Use the exact task ids (e.g. task_2) as send_agent_message targets.`
-				: "You are running as a subagent. Do not call subagent/delegation tools unless the parent explicitly asks. Return a concise final answer for the parent agent.";
+				? `You are running as a subagent. Your bash tool already executes in the project working directory — never prefix commands with \`cd\`. Do not call subagent/delegation tools unless the parent explicitly asks. Return a concise final answer. You MAY use ask_parent only when truly blocked on information only the parent has; notify_parent for one-way updates; send_agent_message/poll_agent_messages to coordinate with siblings. Your mailbox address and siblings: ${task.roster ?? "(none)"}. Use the exact task ids (e.g. task_2) as send_agent_message targets.`
+				: `You are running as a subagent. Your bash tool already executes in the project working directory — never prefix commands with \`cd\`. Do not call subagent/delegation tools unless the parent explicitly asks. Return a concise final answer for the parent agent.`;
 
 			const loader = new DefaultResourceLoader({
 				cwd: task.cwd,
