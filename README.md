@@ -133,7 +133,7 @@ Background + intercom:
 | Tool | Purpose |
 |---|---|
 | `subagent` | single / `tasks` (parallel or graph via `needs`) / `chain` (`{previous}`); `background:true` fire-and-forget; `allowIntercom:true` enables child talk tools; `notifyPerTask: true` wakes you as each task completes (default off) |
-| `subagent_status` | live per-task snapshot (non-blocking) |
+| `subagent_status` | live per-task snapshot (non-blocking), including each child's session file path |
 | `subagent_result` | full output of a run or one task |
 | `await_subagent` | block until a run finishes (optional `timeoutMs`) |
 | `reply_subagent` | answer a child's `ask_parent` question |
@@ -160,6 +160,23 @@ Read-only pane over the session's subagents:
 - `enter` — live tail of that child's session file (`esc` goes back)
 - `x` then `y` — abort ONE subagent (only mutation; `n`/any other key cancels)
 - `esc` — close
+
+## Watching a child from outside
+
+`subagent_status` returns each running child's session file (JSONL). Children are `AgentSession`s in this process — they have no TTY — but their transcript is a real file, so any external viewer can follow one:
+
+```sh
+tail -f /path/from/subagent_status.jsonl
+```
+
+In a terminal multiplexer, that is a pane per agent — e.g. with [Herdr](https://herdr.dev):
+
+```sh
+herdr pane split --current --direction right
+herdr pane run w1:p2 "tail -f /path/from/subagent_status.jsonl"
+```
+
+The extension has no multiplexer integration and does not want one: it exposes the path, your agent already knows how to drive its own terminal. For an in-pi view of the same stream, use [`/subagents peek`](#peek--subagents-peek-or-ctrlshifta).
 
 ## Context budget
 

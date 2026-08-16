@@ -1473,14 +1473,18 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool<typeof RunIdParam, { run?: RunSnapshot }>({
 		name: "subagent_status",
 		label: "Subagent Status",
-		description: "Live status of a subagent run (non-blocking): per-task state.",
+		description: "Live status of a subagent run (non-blocking): per-task state, plus each child's session file path (JSONL) so you can tail it from outside — e.g. in a terminal multiplexer pane.",
 		promptSnippet: "Check progress of a subagent run.",
 		parameters: RunIdParam,
 		async execute(_id, params) {
 			const { runId } = params as { runId: string };
 			const run = manager.getRun(runId);
 			if (!run) return { content: [{ type: "text", text: `Unknown runId: ${runId}` }], isError: true, details: {} };
-			return { content: [{ type: "text", text: compactLines(run).join("\n") }], details: { run: cloneRun(run) } };
+			// Session file paths are the one primitive an outside tool needs: `tail -f` it in a
+			// multiplexer pane, a log viewer, anything. Cheaper than owning a pane integration.
+			const files = run.tasks.filter((t) => t.sessionFile).map((t) => `${t.id} (${t.agent}): ${t.sessionFile}`);
+			const text = [compactLines(run).join("\n"), ...(files.length > 0 ? ["", "Live session files (tail -f to watch):", ...files] : [])].join("\n");
+			return { content: [{ type: "text", text }], details: { run: cloneRun(run) } };
 		},
 	});
 
