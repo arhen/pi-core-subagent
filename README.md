@@ -14,6 +14,21 @@ One rule underneath everything else:
 
 That is [Graph Protocol](#graph-protocol), applied to the runtime rather than to the prompt.
 
+```mermaid
+flowchart LR
+    subgraph w1["wave 1 — runs in parallel"]
+        api["api<br/><i>api-mapper</i>"]
+        db["db<br/><i>db-mapper</i>"]
+    end
+    gate{{"gate"}}
+    subgraph w2["wave 2"]
+        doc["doc<br/><i>writer</i>"]
+    end
+    api -- "route map" --> gate
+    db -- "schema map" --> gate
+    gate -- "both outputs<br/>prepended to the prompt" --> doc
+```
+
 ![Subagents widget](docs/subagents-widget.png)
 
 *The `subagent` tool call plus the live above-editor widget: per-agent activity, tool counts, turns, token counters and timers.*
@@ -32,6 +47,29 @@ That is [Graph Protocol](#graph-protocol), applied to the runtime rather than to
 - **Throttled updates** — widget/stream updates coalesce to ~6/s; no per-event deep clones.
 - **No silent hangs** — watchdog aborts children that produce no events for 3 minutes.
 - **No default runtime cap** — tasks run until done, stalled (watchdog), or aborted by the user. `maxRuntimeMs` is opt-in (default 0 = unlimited).
+
+## How it runs
+
+Children are not subprocesses. They are separate `AgentSession`s inside the same pi process — which is why spawning is instant, and why a child's transcript never lands in your context:
+
+```mermaid
+flowchart TB
+    subgraph proc["one OS process — no spawn, no IPC"]
+        direction TB
+        L["<b>leader</b><br/>your session, your context"]
+        subgraph kids["isolated child sessions"]
+            direction LR
+            A["api-mapper"]
+            B["db-mapper"]
+        end
+    end
+    L -- "task text in" --> A
+    L -- "task text in" --> B
+    A -. "final answer only" .-> L
+    B -. "final answer only" .-> L
+```
+
+The dotted arrows are the whole point: a child may burn 200k tokens reading files, and the leader receives only its final answer.
 
 ## Install
 
@@ -103,18 +141,82 @@ subagent graph 3
 
 `✎` marks a write-toolset task; `←` lists its edges. With no `needs` anywhere the wave line is omitted entirely.
 
-What the edge does:
+### What one edge does
 
-- **Gates** — `doc` starts only after both `api` and `db` finish.
-- **Carries** — `api`'s and `db`'s outputs are prepended to `doc`'s prompt as `## Output of api` / `## Output of db`. You do not pass them yourself, and you cannot forget to.
-- **Skips on breakage** — if an upstream fails or is aborted, dependents are marked aborted instead of running against a prompt with a hole in it.
+An edge is not just ordering. It is a delivery:
 
-Rules:
+```mermaid
+sequenceDiagram
+    participant S as scheduler
+    participant A as api
+    participant D as db
+    participant W as doc
 
-- Tasks with no unmet `needs` run together, throttled by `concurrency`.
-- Unknown ids, self-edges and cycles are rejected **before any child spawns**.
-- `chain` is exactly `needs: [previous]` — same scheduler, kept for convenience. `{previous}` still expands.
-- Zero `needs` anywhere = plain parallel. No ceremony added to flat fan-out.
+    Note over S,D: wave 1 — both start together
+    S->>A: "Map every route in src/api/"
+    S->>D: "Map the schema in src/db/"
+    A-->>S: route map
+    Note right of W: doc is queued,<br/>waiting at the gate
+    D-->>S: schema map
+    Note over S: gate opens: every need settled
+    S->>W: ## Output of api<br/>&lt;route map&gt;<br/><br/>## Output of db<br/>&lt;schema map&gt;<br/>---<br/>"Write ARCHITECTURE.md…"
+```
+
+The leader never copies those outputs into the prompt — so it cannot forget to.
+
+### One scheduler, four shapes
+
+Single, parallel, chain and graph are not four code paths. They are four shapes of the same wave loop:
+
+```mermaid
+flowchart LR
+    subgraph one["single"]
+        direction TB
+        s1(("a"))
+    end
+    subgraph par["parallel — no needs"]
+        direction TB
+        p1(("a")) ~~~ p2(("b")) ~~~ p3(("c"))
+    end
+    subgraph ch["chain — needs: [previous]"]
+        direction TB
+        c1(("a")) --> c2(("b")) --> c3(("c"))
+    end
+    subgraph gr["graph — needs"]
+        direction TB
+        g1(("a")) --> g2(("b"))
+        g1 --> g3(("c"))
+        g2 --> g4(("d"))
+        g3 --> g4
+    end
+```
+
+### The loop
+
+```mermaid
+flowchart TD
+    start(["subagent call"]) --> validate{"graph valid?<br/><small>unknown id · self-edge · cycle</small>"}
+    validate -- no --> reject["reject the call<br/><b>zero children spawned</b>"]
+    validate -- yes --> loop{"tasks left?"}
+    loop -- no --> done(["run finished"])
+    loop -- yes --> ready["frontier =<br/>tasks whose needs are all settled"]
+    ready --> spawn["run that wave in parallel<br/><small>throttled by concurrency</small>"]
+    spawn --> collect["record each output<br/>mark tasks settled"]
+    collect --> loop
+```
+
+Two consequences worth stating plainly:
+
+- **A bad graph costs nothing.** Validation happens before the first spawn, never halfway through with three children already burning tokens.
+- **A broken upstream stops its branch.** If a need fails or is aborted, its dependents are marked aborted rather than run against a prompt with a hole in it:
+
+```mermaid
+flowchart LR
+    api["api ✓"] --> doc
+    db["db ✗ failed"] --> doc["doc ⏹ skipped<br/><small>never spawned</small>"]
+```
+
+And the rule that keeps this from becoming ceremony: **zero `needs` anywhere = plain parallel.** No waves, no gates, no graph vocabulary imposed on flat work.
 
 Background + intercom:
 
@@ -163,7 +265,16 @@ Read-only pane over the session's subagents:
 
 ## Watching a child from outside
 
-`subagent_status` returns each running child's session file (JSONL). Children are `AgentSession`s in this process — they have no TTY — but their transcript is a real file, so any external viewer can follow one:
+A child has no terminal of its own — but it does write a real transcript file, and that file is the seam every external viewer can use:
+
+```mermaid
+flowchart LR
+    child["child session<br/><small>no TTY</small>"] -- writes --> file[("session.jsonl")]
+    file -- "peek · enter" --> pane["in-pi tail"]
+    file -- "tail -f" --> term["any terminal pane<br/><small>herdr · tmux · zellij</small>"]
+```
+
+`subagent_status` returns that path for every running child:
 
 ```sh
 tail -f /path/from/subagent_status.jsonl
@@ -211,6 +322,16 @@ The protocol asks the coordinator to compare the delegated subgraph against the 
 - Asked to audit its own work against 34 real violations, an agent reported **0** — at 90–100 confidence. A *fresh* instance of the same model shown the same output caught 7 (p = 0.0156). A deterministic checker caught all 34. ([Armalo Labs, 2026](https://www.armalo.ai/labs/research/2026-06-11-zero-bit-self-audit))
 - Across 9,876 τ2-bench and 1,879 AppWorld trajectories, "false success" reached **75.8%** of self-assessing coding-agent failures; adding an LLM judge scored **0.54–0.65 AUROC** (0.5 = coin flip). ([arXiv:2606.09863](https://doi.org/10.48550/arxiv.2606.09863))
 - LLM judges reading agent traces can be flipped by rewriting the trace — the exact surface a self-reported graph exposes. ([arXiv:2601.14691](https://arxiv.org/html/2601.14691))
+
+The shape of the problem:
+
+```mermaid
+flowchart TD
+    W["worker finishes"] --> Q{"who says it's correct?"}
+    Q -- "the worker itself" --> S["self-report<br/><b>0 of 34 caught</b><br/><small>at 90–100 confidence</small>"]
+    Q -- "another model reading the trace" --> J["LLM judge<br/><b>0.54–0.65 AUROC</b><br/><small>0.5 = coin flip</small>"]
+    Q -- "the machine" --> D["exit code + git diff<br/><b>34 of 34 caught</b>"]
+```
 
 So §9 in practice is two things you already have:
 
