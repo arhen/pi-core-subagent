@@ -385,7 +385,22 @@ class SubagentManager {
 	private widgetTimer: ReturnType<typeof setTimeout> | undefined;
 	private widgetRun: RunSnapshot | undefined;
 
+	turnActivity = false;
+
 	constructor(private readonly pi: ExtensionAPI) {}
+
+	/** Hide the widget. Call on agent_start when the turn made no subagent calls. */
+	clearWidget(ctx: ExtensionContext): void {
+		this.widgetRun = undefined;
+		this.widgetTui = null;
+		if (ctx.hasUI) {
+			try {
+				ctx.ui.setWidget("subagents", undefined);
+			} catch {
+				/* ignore */
+			}
+		}
+	}
 
 	listRuns(): RunSnapshot[] {
 		return Array.from(this.runs.values()).sort((a, b) => b.createdAt - a.createdAt);
@@ -812,6 +827,7 @@ class SubagentManager {
 			task.roster = roster;
 		}
 		run.tasks.forEach((t) => (t.runId = run.id));
+		this.turnActivity = true;
 		this.runs.set(run.id, run);
 		this.settlers.set(run.id, () => {});
 		this.runControllers.set(run.id, new AbortController());
@@ -1034,6 +1050,11 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.setWidget("subagents", runs.flatMap((run) => compactLines(run).concat("")), { placement: "aboveEditor" });
 			ctx.ui.notify(`Showing ${runs.length} subagent run(s).`, "info");
 		},
+	});
+
+	pi.on("agent_start", (_event, ctx) => {
+		if (!manager.turnActivity) manager.clearWidget(ctx);
+		manager.turnActivity = false;
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
