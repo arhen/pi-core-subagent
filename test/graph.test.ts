@@ -150,7 +150,7 @@ describe("wave frontier (real scheduler)", () => {
 			2,
 			new Map(),
 			new Set(),
-			async (task) => {
+			async (_task) => {
 				active++;
 				maxActive = Math.max(maxActive, active);
 				await new Promise((r) => setTimeout(r, 5));

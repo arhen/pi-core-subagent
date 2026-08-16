@@ -14,7 +14,7 @@
  * format.ts, run lifecycle → manager.ts, this file = entry + registrations.
  */
 
-import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import {
 	compactLines,

@@ -399,7 +399,7 @@ export class SubagentManager {
 		);
 	}
 
-	private updateRun(run: RunSnapshot, ctx?: ExtensionContext, onUpdate?: (partial: any) => void): void {
+	private updateRun(run: RunSnapshot, ctx?: ExtensionContext, _onUpdate?: (partial: any) => void): void {
 		run.aggregateUsage = aggregateUsage(run.tasks);
 		this.runs.set(run.id, run);
 		this.emit("subagent:run-updated", {
