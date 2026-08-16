@@ -206,21 +206,34 @@ export class SubagentManager {
 	/** Default for `background` when the agent doesn't say — toggle via `/subagents auto-bg on|off`. */
 	private autoBg = true;
 
+	/** When false, strip leader-imposed maxRuntimeMs so tasks run unlimited — toggle via `/subagents auto-limit on|off`. */
+	private autoLimit = true;
+
 	turnActivity = false;
 
 	constructor(private readonly pi: ExtensionAPI) {
 		try {
 			const cfg = JSON.parse(readFileSync(join(getAgentDir(), "subagents-config.json"), "utf8"));
 			if (typeof cfg.autoBg === "boolean") this.autoBg = cfg.autoBg;
+			if (typeof cfg.autoLimit === "boolean") this.autoLimit = cfg.autoLimit;
 		} catch {
-			/* no config yet — default true */
+			/* no config yet — defaults */
 		}
 	}
 
 	/** Flip the background-by-default flag; persists to the agent dir. Returns the new value. */
 	setAutoBg(on: boolean): boolean {
 		this.autoBg = on;
-		void writeFile(join(getAgentDir(), "subagents-config.json"), JSON.stringify({ autoBg: on }, null, 2)).catch(
+		void writeFile(join(getAgentDir(), "subagents-config.json"), JSON.stringify({ autoBg: on, autoLimit: this.autoLimit }, null, 2)).catch(
+			() => {},
+		);
+		return on;
+	}
+
+	/** Flip the auto-limit flag; persists to the agent dir. Returns the new value. */
+	setAutoLimit(on: boolean): boolean {
+		this.autoLimit = on;
+		void writeFile(join(getAgentDir(), "subagents-config.json"), JSON.stringify({ autoBg: this.autoBg, autoLimit: on }, null, 2)).catch(
 			() => {},
 		);
 		return on;
@@ -228,6 +241,10 @@ export class SubagentManager {
 
 	get autoBgOn(): boolean {
 		return this.autoBg;
+	}
+
+	get autoLimitOn(): boolean {
+		return this.autoLimit;
 	}
 
 	/** Any run still has queued/running tasks? */
@@ -733,7 +750,8 @@ export class SubagentManager {
 					),
 			});
 
-			const maxRuntimeMs = input.maxRuntimeMs ?? DEFAULT_RUNTIME_MS;
+			// auto-limit off = strip leader-imposed caps; tasks run unlimited until done.
+			const maxRuntimeMs = this.autoLimit ? (input.maxRuntimeMs ?? DEFAULT_RUNTIME_MS) : 0;
 			const promptPromise = child.prompt(task.task, { source: "extension" });
 			const races: Promise<unknown>[] = [promptPromise, childFailurePromise, childEndPromise, watchdog.promise];
 			if (maxRuntimeMs > 0) {

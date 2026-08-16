@@ -263,6 +263,7 @@ Background (default) + intercom — the run returns a runId immediately; you sta
 
 - `/subagents` — list runs; `/subagents peek` (or `ctrl+shift+a`) — browsable pane
 - `/subagents auto-bg on|off` — toggle background-by-default for subagent calls (persists to `~/.pi/agent/subagents-config.json`; default on). `off` makes calls block until the run finishes, result inline in the same turn. Bare `/subagents auto-bg` shows the current state.
+- `/subagents auto-limit on|off` — toggle leader-imposed `maxRuntimeMs` caps (persists to the same config; default on). `off` strips ALL task timeouts: tasks run unlimited until done, stalled, or aborted — only for runs where a hard bound is genuinely required is a cap kept (none, when off). Bare `/subagents auto-limit` shows the current state.
 
 ## Peek — `/subagents peek` or `ctrl+shift+a`
 

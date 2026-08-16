@@ -51,7 +51,8 @@ export const SubagentParams = Type.Object({
 	),
 	maxRuntimeMs: Type.Optional(
 		Type.Number({
-			description: "Per-task timeout, ms. Omit for no cap (default): tasks run until done, stalled, or user-aborted.",
+			description:
+				"Per-task timeout, ms. Omit for no cap (default): tasks run until done, stalled, or user-aborted. Do not add arbitrary caps — only set when a hard bound is genuinely required.",
 		}),
 	),
 	background: Type.Optional(

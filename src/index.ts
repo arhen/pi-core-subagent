@@ -84,6 +84,22 @@ export default function (pi: ExtensionAPI) {
 				.trim()
 				.toLowerCase();
 			if (arg === "peek") return openPeek(ctx);
+			if (arg === "auto-limit" || arg.startsWith("auto-limit ")) {
+				const value = arg.split(/\s+/)[1];
+				if (value === "on" || value === "off") {
+					const next = manager.setAutoLimit(value === "on");
+					ctx.ui.notify(
+						`auto-limit ${next ? "on" : "off"} — ${next ? "leader-imposed" : "no"} maxRuntimeMs caps apply to tasks (off = unlimited until done).`,
+						"info",
+					);
+				} else {
+					ctx.ui.notify(
+						`auto-limit is ${manager.autoLimitOn ? "on" : "off"} — use \`/subagents auto-limit on|off\` (off = tasks run unlimited until done).`,
+						"info",
+					);
+				}
+				return;
+			}
 			if (arg === "auto-bg" || arg.startsWith("auto-bg ")) {
 				const value = arg.split(/\s+/)[1];
 				if (value === "on" || value === "off") {
