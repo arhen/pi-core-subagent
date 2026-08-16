@@ -396,7 +396,7 @@ class SubagentManager {
 	private liveChildren = new Map<string, { abort: () => void; dispose: () => void; touchWatchdog: () => void }>();
 	private mailboxes: Mailbox = createMailbox();
 	private runControllers = new Map<string, AbortController>();
-	private widgetTimer: ReturnType<typeof setTimeout> | undefined;
+	private widgetTimers = new Map<string, ReturnType<typeof setTimeout>>(); // per-run stream throttle
 	private widgetRuns: RunSnapshot[] = [];
 
 	turnActivity = false;
@@ -431,14 +431,19 @@ class SubagentManager {
 		return runId ? this.runs.get(runId) : undefined;
 	}
 	clearRuns(): void {
+		for (const child of this.liveChildren.values()) {
+			child.abort();
+			child.dispose();
+		}
+		this.liveChildren.clear();
 		this.runs.clear();
 		this.settlers.clear();
 		this.pendingReplies.clear();
 		this.runControllers.clear();
 		this.mailboxes = createMailbox();
 		this.widgetTui = null; // force re-registration on the next session
-		if (this.widgetTimer) clearTimeout(this.widgetTimer);
-		this.widgetTimer = undefined;
+		for (const t of this.widgetTimers.values()) clearTimeout(t);
+		this.widgetTimers.clear();
 		this.widgetRuns = [];
 	}
 
@@ -531,22 +536,23 @@ class SubagentManager {
 	}
 	private scheduleWidget(run: RunSnapshot | undefined, ctx?: ExtensionContext, onUpdate?: (partial: any) => void): void {
 		this.upsertWidgetRun(run);
-		if (this.widgetTimer || this.widgetRuns.length === 0) return;
-		this.widgetTimer = setTimeout(() => {
-			this.widgetTimer = undefined;
-			if (this.widgetRuns.length === 0) return;
-			const targets = [...this.widgetRuns]; // read at fire: never render stale runs
+		if (!run || this.widgetTimers.has(run.id)) return;
+		this.widgetTimers.set(run.id, setTimeout(() => {
+			this.widgetTimers.delete(run.id);
 			if (ctx?.hasUI) {
 				this.ensureWidget(ctx);
 				this.widgetTui?.requestRender();
 			}
-			onUpdate?.({ content: [{ type: "text", text: compactLines(run ?? targets[0]!).join("\n") }] });
-		}, WIDGET_THROTTLE_MS);
+			onUpdate?.({ content: [{ type: "text", text: compactLines(run).join("\n") }] });
+		}, WIDGET_THROTTLE_MS));
 	}
 	private flushWidget(run: RunSnapshot | undefined, ctx?: ExtensionContext, onUpdate?: (partial: any) => void): void {
-		if (this.widgetTimer) {
-			clearTimeout(this.widgetTimer);
-			this.widgetTimer = undefined;
+		if (run) {
+			const t = this.widgetTimers.get(run.id);
+			if (t) {
+				clearTimeout(t);
+				this.widgetTimers.delete(run.id);
+			}
 		}
 		if (!run || this.widgetRuns.length === 0) return;
 		if (ctx?.hasUI) {
@@ -586,6 +592,13 @@ class SubagentManager {
 				this.updateTask(run, task, { status: "awaiting_parent" }, ctx);
 				this.liveChildren.get(`${run.id}:${task.id}`)?.touchWatchdog();
 				this.notifyParent(run, "asked", { taskId: task.id, question });
+				// A blocking run's parent can't reply mid-tool (followUp only fires after the
+				// tool returns) — only background runs can truly wait for the answer.
+				if (!run.background) {
+					this.updateTask(run, task, { status: "running" }, ctx);
+					this.liveChildren.get(`${run.id}:${task.id}`)?.touchWatchdog();
+					return "Parent cannot answer while this run is blocking. Continue autonomously with your best judgment.";
+				}
 				const reply = await this.awaitParentReply(run.id, task.id);
 				this.updateTask(run, task, { status: "running" }, ctx);
 				this.liveChildren.get(`${run.id}:${task.id}`)?.touchWatchdog();
@@ -593,10 +606,24 @@ class SubagentManager {
 			},
 			onNotifyParent: (_taskId, message, level) => {
 				this.emit("subagent:intercom", { runId: run.id, taskId: task.id, kind: "notify", level, message });
+				if (!run.awaited) {
+					try {
+						this.pi.sendUserMessage(`[Subagent ${task.agent}] ${message}`, { deliverAs: "followUp" });
+					} catch {
+						/* parent mid-stream */
+					}
+				}
 			},
 			onSendMessage: (_taskId, to, text) => {
 				if (to === "leader") {
 					this.emit("subagent:intercom", { runId: run.id, taskId: task.id, kind: "notify", level: "info", message: text });
+					if (!run.awaited) {
+						try {
+							this.pi.sendUserMessage(`[Subagent ${task.agent}] ${text}`, { deliverAs: "followUp" });
+						} catch {
+							/* parent mid-stream */
+						}
+					}
 					return true;
 				}
 				// Run-scoped keys: sibling ids are run-local; cross-run task_1 can never collide.
@@ -706,7 +733,7 @@ class SubagentManager {
 			});
 
 			unsubscribe = child.subscribe((event: AgentSessionEvent) => {
-				const active = event.type === "message_update" || event.type === "message_end" || event.type === "tool_execution_start" || event.type === "tool_execution_end" || event.type === "agent_settled";
+				const active = event.type === "message_update" || event.type === "message_end" || event.type === "tool_execution_start" || event.type === "tool_execution_update" || event.type === "tool_execution_end" || event.type === "bash_execution_update" || event.type === "agent_settled";
 				if (active) {
 					watchdog.touch();
 					this.emit("subagent:session-event", { runId: run.id, taskId: task.id, seq: eventSeq++, event: { type: event.type } });
@@ -745,7 +772,10 @@ class SubagentManager {
 				}
 			});
 
-			const abortChild = () => void child?.abort();
+			const abortChild = () => {
+				void child?.abort();
+				this.runControllers.get(run.id)?.abort(); // parent abort kills ALL siblings, not just this child
+			};
 			const runController = this.runControllers.get(run.id);
 			if (signal) signal.addEventListener("abort", abortChild, { once: true });
 			if (runController) runController.signal.addEventListener("abort", abortChild, { once: true });
@@ -947,6 +977,7 @@ class SubagentManager {
 	cancelRun(runId: string): { aborted: number } {
 		const run = this.runs.get(runId);
 		if (!run) return { aborted: 0 };
+		if (TERMINAL.includes(run.status)) return { aborted: 0 }; // never corrupt a finished run
 		let aborted = 0;
 		this.runControllers.get(runId)?.abort();
 		for (const [key, child] of this.liveChildren) {
