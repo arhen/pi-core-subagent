@@ -241,14 +241,25 @@ function themedTaskLine(task: TaskSnapshot, theme: Theme, activity = ""): string
 	}
 	return `${statusIcon(task.status)} ${task.agent} · ${activity}${colorNums(theme.fg("muted", tail), theme)}`;
 }
-function argsSuffix(args: unknown): string {
-	try {
-		const s = JSON.stringify(args);
-		if (!s || s === "{}") return "";
-		return ` ${s.length > 60 ? `${s.slice(0, 60)}…` : s}`;
-	} catch {
-		return "";
+/**
+ * Human-readable activity line: "Read src/index.ts", "Grep wrapSingleLine".
+ * ponytail: picks the first interesting string arg instead of a per-tool table —
+ * unknown/custom tools then read fine too. Add a case only if one reads badly.
+ */
+// Order matters: the most specific arg wins (grep's pattern beats its path).
+const ARG_KEYS = ["pattern", "query", "command", "path", "file_path", "filePath", "url", "name", "subject", "task"];
+export function describeCall(toolName: string, args: unknown, cwd?: string): string {
+	const verb = toolName.charAt(0).toUpperCase() + toolName.slice(1);
+	const obj = args && typeof args === "object" ? (args as Record<string, unknown>) : undefined;
+	if (!obj) return verb;
+	let value = ARG_KEYS.map((k) => obj[k]).find((v) => typeof v === "string" && v.trim() !== "") as string | undefined;
+	if (value === undefined) {
+		value = Object.values(obj).find((v) => typeof v === "string" && v.trim() !== "") as string | undefined;
 	}
+	if (value === undefined) return verb;
+	let text = value.replace(/\s+/g, " ").trim();
+	if (cwd && text.startsWith(`${cwd}/`)) text = text.slice(cwd.length + 1); // absolute paths inside the task cwd read as noise
+	return `${verb} ${text.length > 60 ? `${text.slice(0, 60)}…` : text}`;
 }
 function activitySnippet(text: string): string {
 	const flat = text.replace(/\s+/g, " ").trim();
@@ -788,7 +799,7 @@ class SubagentManager {
 					this.emit("subagent:session-event", { runId: run.id, taskId: task.id, seq: eventSeq++, event: { type: event.type } });
 				}
 				if (event.type === "tool_execution_start") {
-					this.updateTask(run, task, { toolCalls: task.toolCalls + 1, lastActivity: `${event.toolName}${argsSuffix(event.args)}` }, ctx, onUpdate);
+					this.updateTask(run, task, { toolCalls: task.toolCalls + 1, lastActivity: describeCall(event.toolName, event.args, task.cwd) }, ctx, onUpdate);
 				} else if (event.type === "tool_execution_end") {
 					this.scheduleWidget(run, ctx, onUpdate);
 				} else if (event.type === "message_end") {

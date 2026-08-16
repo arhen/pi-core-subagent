@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
 import { createPeekPane, type PeekTask } from "../src/peek.ts";
+import { describeCall } from "../src/index.ts";
 
 const theme = { fg: (_c: string, s: string) => s, bold: (s: string) => s } as any;
 
@@ -55,4 +56,13 @@ test("no default runtime cap; explicit maxRuntimeMs still honored", () => {
 	const src = require("node:fs").readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
 	expect(src).toMatch(/const DEFAULT_RUNTIME_MS = 0;/);
 	expect(src).toMatch(/if \(maxRuntimeMs > 0\)/);
+});
+
+test("describeCall renders human activity lines", () => {
+	expect(describeCall("read", { path: "src/index.ts" })).toBe("Read src/index.ts");
+	expect(describeCall("grep", { pattern: "wrapSingleLine", path: "src/" })).toBe("Grep wrapSingleLine");
+	expect(describeCall("read", { path: "/repo/src/a.ts" }, "/repo")).toBe("Read src/a.ts");
+	expect(describeCall("bash", { command: "ls  -la\n/tmp" })).toBe("Bash ls -la /tmp");
+	expect(describeCall("weird_tool", { count: 3 })).toBe("Weird_tool"); // no string arg → verb only
+	expect(describeCall("custom", { blob: "x".repeat(80) }).endsWith("…")).toBe(true);
 });
